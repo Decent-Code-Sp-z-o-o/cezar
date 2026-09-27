@@ -381,11 +381,12 @@ interface ActiveRun {
    *  the session is working again. See `tryCompactionContinue`. */
   compactionContinues?: number;
   /**
-   * A NON-FINAL agent step emitted `CEZ:ASK`, so the workflow is parked on that
-   * step instead of advancing into its next check (#917). Two values, because
+   * A NON-FINAL agent step emitted `CEZ:ASK` or `CEZ:MONITORING`, so the workflow
+   * is parked on that step instead of advancing into its next check (#917, #1076).
+   * Two values, because
    * the park has two endings and they settle differently:
    *
-   *  - `'waiting'` — live: the session is open and the answer is still expected.
+   *  - `'waiting'` — live: the session is open and an answer or monitored work is still expected.
    *    `execute` sits inside `runAgentStep` for as long as that holds, so seeing
    *    this value after the step loop means the session closed WITHOUT an answer
    *    (the idle timer, the wall clock, a crash) and the run settles `failed`.
@@ -393,7 +394,8 @@ interface ActiveRun {
    *    so the run settles like any other finished run.
    *
    * A delivered answer clears it (`deliverMessage`) and the workflow resumes.
-   * Mirrored durably onto the record as `RunRecord.askParked` for `recover()`.
+   * ASK parks are mirrored durably onto the record as `RunRecord.askParked` for `recover()`;
+   * monitoring parks are already durable as `status: 'running', activity: 'monitoring'`.
    * Never set on an autonomous run whose nudge outranked the ask — see
    * `tryAutonomousNudge` and the park in `runAgentStep`'s turn-end.
    */
@@ -3271,10 +3273,10 @@ export class RunManager {
     const state = this.active.get(runId);
     if (state?.session?.open) {
       this.clearIdleTimer(state);
-      // Finish on a run parked mid-workflow on a `CEZ:ASK` (#917) is not an
-      // answer, it is "stop here" — so it settles like every other Finish
-      // (`done`, or `review` when the worktree holds changes) instead of the
-      // `failed` a question nobody ever answered settles as.
+      // Finish on a run parked mid-workflow on `CEZ:ASK` or `CEZ:MONITORING`
+      // (#917, #1076) is an explicit "stop here" — so it settles like every
+      // other Finish (`done`, or `review` when the worktree holds changes)
+      // instead of the `failed` an abandoned live park would settle as.
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
@@ -4450,8 +4452,10 @@ export class RunManager {
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
         // are the agent telling cezar what it did, and a chained workflow's non-final step that
-        // reported would otherwise be heard by nobody. The PARK below stays interactive-only,
-        // exactly as it always was.
+        // reported would otherwise be heard by nobody. The PARK below is no longer
+        // interactive-only either (#1076): a non-final step that dispatched, or that emitted
+        // `CEZ:MONITORING`, is waiting on work it started, so it holds the workflow at that step
+        // exactly as a non-final `CEZ:ASK` does (#917) instead of closing and running the next check.
         const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
           state,
           stepId: step.id,
@@ -4472,27 +4476,26 @@ export class RunManager {
           turnText,
           Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
         );
-        // Does this ask park the WORKFLOW — hold a non-final step open instead
-        // of letting `execute` mark it done and run the next check (#917)?
+        // Does this turn park the WORKFLOW — hold a non-final step open instead
+        // of letting `execute` mark it done and run the next check (#917, #1076)?
         //
-        // Only a marker that parsed can: a malformed one produces no ask card,
-        // so parking on it would halt an otherwise autonomous workflow on a
-        // question the user cannot even see, for as long as the session lives.
+        // Only a parsed ASK or valid monitoring marker can: a malformed ASK produces no ask card,
+        // so parking on it would halt an otherwise autonomous workflow on a question the user
+        // cannot even see, for as long as the session lives.
         // It degrades to the `resolveAskTurn` note plus the raw marker left in
         // the transcript, and the workflow carries on. The final interactive step
         // is untouched by this: it parks at `waiting` whatever the marker looked
         // like, where the prose fallback is still answerable and nothing
         // downstream is being blocked (#473).
-        const parksWorkflow = !interactive && ask !== null && Boolean(sessionOpen);
         // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
         // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
         const monitoring =
-          interactive &&
           sessionOpen &&
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        const parksWorkflow = !interactive && (ask !== null || monitoring);
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
@@ -4503,8 +4506,8 @@ export class RunManager {
           state.session?.end();
           return;
         }
-        // `waiting` now also covers a NON-final step parking on an ask (#917), which
-        // is what holds the workflow at that step instead of running its next check.
+        // `waiting` now also covers a NON-final step parking on an ask or monitor (#917, #1076),
+        // which is what holds the workflow at that step instead of running its next check.
         const waiting = (interactive || parksWorkflow) && sessionOpen;
         // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to keep
         // going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. The SAME helper
