@@ -1618,6 +1618,7 @@ export function createApp(deps: ServerDeps) {
       // unreadable workspace degrades to `projects: []`.
       projects: workspace.projects,
       bootProject: workspace.bootProject,
+      ...(process.env.CEZ_INSTANCE_ID ? { instanceId: process.env.CEZ_INSTANCE_ID } : {}),
     };
   };
   // ---- server-side health cache (stale-while-revalidate) -------------------
