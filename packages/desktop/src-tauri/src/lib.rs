@@ -72,7 +72,9 @@ const INIT_SCRIPT: &str = r#"
   (function () {
     var platform = "__PLATFORM__";
     window.__CEZ_DESKTOP__ = { platform: platform };
-    document.documentElement.dataset.cezDesktop = platform;
+    // At document start the root element may not exist yet; the flag is a convenience, the
+    // rest of this script is not.
+    if (document.documentElement) document.documentElement.dataset.cezDesktop = platform;
     if (platform !== "macos" || location.protocol !== "http:") return;
 
     // What the shell adds to the title strip of a cockpit that predates the desktop-aware build
@@ -171,7 +173,11 @@ const INIT_SCRIPT: &str = r#"
       shell.appendChild(strip);
       var style = document.createElement('style');
       style.textContent =
-        '[data-slot="app-shell"]>aside[data-slot="sidebar"],[data-slot="app-shell"]>div{padding-top:28px!important}' +
+        // The cockpit's columns — never the strip and the row this script adds beside them,
+        // which are `div`s under the same parent: inset too, the row grew to 28px and pushed
+        // the version chip out of the band, onto the brand row.
+        '[data-slot="app-shell"]>aside[data-slot="sidebar"],' +
+        '[data-slot="app-shell"]>div:not([data-cez-legacy-titlebar]):not([data-cez-titlebar-items]){padding-top:28px!important}' +
         '[data-slot="sidebar-content"]>div:first-child{padding-top:6px!important}';
       document.head.appendChild(style);
       if (pendingVersion) { var v = pendingVersion; pendingVersion = null; renderVersion(v); }
@@ -456,8 +462,13 @@ fn check_cezar_update(app: &AppHandle, shell: &Shell) {
     }
 }
 
-/// Tell the page there is something newer. The desktop-aware cockpit ignores this (it paints
-/// its own button from the sidecar's check); a legacy one grows the button in its strip.
+/// Whether the legacy strip's version chip has anything to offer.
+fn switcher_has_choices(installed: usize) -> bool {
+    installed > 1
+}
+
+/// Tell the page which version runs. The desktop-aware cockpit ignores this (it paints its own
+/// chip); a legacy one grows the switcher in its strip.
 fn offer_version(window: &WebviewWindow, version: &str) {
     let _ = window.eval(&format!(
         "window.__CEZ_DESKTOP__ && window.__CEZ_DESKTOP__.showVersion && window.__CEZ_DESKTOP__.showVersion({})",
@@ -725,8 +736,12 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             let generation = pid;
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(4));
-                if let (Some(version), Some(window)) = (shell.running_version.lock().unwrap().clone(), app.get_webview_window("main")) {
-                    offer_version(&window, &version);
+                // The chip is a SWITCHER: with one version installed it would open a list of
+                // one. The version itself is already in the cockpit's sidebar and in the menu.
+                if switcher_has_choices(installed_versions().len()) {
+                    if let (Some(version), Some(window)) = (shell.running_version.lock().unwrap().clone(), app.get_webview_window("main")) {
+                        offer_version(&window, &version);
+                    }
                 }
                 check_cezar_update(&app, &shell);
                 std::thread::sleep(Duration::from_secs(30 * 60));
@@ -1456,6 +1471,24 @@ mod tests {
 
     fn url(raw: &str) -> url::Url {
         url::Url::parse(raw).unwrap()
+    }
+
+    /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
+    /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
+    /// onto the brand row (shell 0.1.1).
+    #[test]
+    fn the_version_switcher_needs_something_to_switch_to() {
+        assert!(!switcher_has_choices(0));
+        assert!(!switcher_has_choices(1));
+        assert!(switcher_has_choices(2));
+    }
+
+    #[test]
+    fn the_legacy_inset_spares_what_the_shell_adds() {
+        let rule = INIT_SCRIPT.split("padding-top:28px!important").next().unwrap();
+        let selector = rule.rsplit("style.textContent").next().unwrap();
+        assert!(selector.contains(":not([data-cez-legacy-titlebar])"), "{selector}");
+        assert!(selector.contains(":not([data-cez-titlebar-items])"), "{selector}");
     }
 
     #[test]
