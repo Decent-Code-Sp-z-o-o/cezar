@@ -1,0 +1,287 @@
+name: Desktop release
+
+# Builds, signs and publishes the desktop shell (packages/desktop) — spec
+# .ai/specs/2026-09-25-desktop-distribution.md. The shell ships on ITS OWN version and cadence:
+# it contains no cezar code (the cockpit + server come from `~/.cezar/versions`, updated from
+# inside the cockpit), so a cezar release never touches it and a shell release is rare.
+#
+# Trigger: push a `desktop-v<version>` tag whose version matches packages/desktop/src-tauri/
+# tauri.conf.json, or dispatch by hand with the same version. The result is ONE GitHub Release
+# holding, per platform, the installer under a stable versionless name (what the landing page
+# and package managers link), the versioned original, and `desktop-latest.json` — the updater
+# manifest the installed shells poll (`plugins.updater.endpoints`).
+#
+# Signing is secret-gated and degrades loudly: without the Apple/Windows secrets the job still
+# builds and uploads UNSIGNED installers and says so in the summary. Do not publish those to a
+# landing page — Gatekeeper and SmartScreen turn them into support tickets.
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must equal packages/desktop/src-tauri/tauri.conf.json)'
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the release + upload assets
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DESKTOP_DIR: packages/desktop
+
+jobs:
+  # One place decides the version and creates the draft release; the matrix only uploads.
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve and verify the version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#desktop-v}"
+          else
+            VERSION="$INPUT_VERSION"
+          fi
+          CONFIGURED=$(node -p "require('./$DESKTOP_DIR/src-tauri/tauri.conf.json').version")
+          if [ "$VERSION" != "$CONFIGURED" ]; then
+            echo "::error::tag/input version $VERSION does not match tauri.conf.json version $CONFIGURED"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=desktop-v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — assets will be replaced"
+          else
+            gh release create "$TAG" --draft --title "cezar desktop v$VERSION" --target "$GITHUB_SHA" \
+              --notes "Desktop shell v$VERSION. Installers below; the shell installs and updates cezar itself from the cockpit."
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+            stable: cezar-macos-aarch64.dmg
+            glob: 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg'
+          - name: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+            stable: cezar-macos-x86_64.dmg
+            glob: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg'
+          - name: Windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ''
+            stable: cezar-windows-x86_64-setup.exe
+            glob: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
+          - name: Linux
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ''
+            stable: cezar-linux-x86_64.AppImage
+            glob: 'src-tauri/target/release/bundle/appimage/*.AppImage'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          # Pinned by SHA, so the action cannot read the toolchain from its own ref name.
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ env.DESKTOP_DIR }}/src-tauri
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install the Tauri CLI
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: npm ci --no-audit --no-fund
+
+      # Apple: import the Developer ID certificate into a throwaway keychain. tauri-action
+      # reads APPLE_* from the environment for signing + notarization. Skipped without secrets.
+      - name: Signing status
+        id: signing
+        shell: bash
+        env:
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          echo "apple=$HAS_APPLE" >> "$GITHUB_OUTPUT"
+          echo "updater=$HAS_UPDATER_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Build and upload with tauri-action
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater artifacts (`.sig` + the manifest) are produced only when the key is present;
+          # a build without it still ships installers, just none an installed shell will adopt.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS signing + notarization (Developer ID). All-or-nothing.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: ${{ env.DESKTOP_DIR }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: cezar desktop v${{ needs.prepare.outputs.version }}
+          releaseDraft: true
+          prerelease: false
+          # The manifest every installed shell polls (plugins.updater.endpoints). Renamed below
+          # so it sits beside the installers as `desktop-latest.json`.
+          includeUpdaterJson: ${{ steps.signing.outputs.updater == 'true' }}
+          updaterJsonKeepUniversal: false
+          # Release bundles per platform. `createUpdaterArtifacts` only here (never in the
+          # checked-in config) so a local `tauri build` does not demand the signing key.
+          args: >-
+            ${{ matrix.args }}
+            --config '{"bundle":{"targets":${{ runner.os == 'macOS' && '["app","dmg"]' || runner.os == 'Windows' && '["nsis"]' || '["appimage","deb"]' }},"createUpdaterArtifacts":${{ steps.signing.outputs.updater == 'true' }}}}'
+
+      # Stable, versionless copies: the landing page's Download button and the package-manager
+      # manifests link these, so shipping a version never means editing a link.
+      - name: Upload the versionless installer
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          STABLE: ${{ matrix.stable }}
+          GLOB: ${{ matrix.glob }}
+        run: |
+          shopt -s nullglob
+          files=( $GLOB )
+          if [ ${#files[@]} -eq 0 ]; then echo "::error::no bundle matched $GLOB"; exit 1; fi
+          cp "${files[0]}" "$STABLE"
+          shasum -a 256 "$STABLE" > "$STABLE.sha256"
+          gh release upload "$TAG" "$STABLE" "$STABLE.sha256" --clobber
+
+  publish:
+    name: Publish release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rename the updater manifest and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          # tauri-action uploads `latest.json`; the shells poll `desktop-latest.json` so the name
+          # can never collide with a future cezar (CLI) manifest on the same release page.
+          if gh release download "$TAG" --repo "$REPO" --pattern latest.json --output desktop-latest.json 2>/dev/null; then
+            gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"
+            gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" || true
+            echo "updater manifest published"
+          else
+            echo "::warning::no updater manifest — TAURI_SIGNING_PRIVATE_KEY is not configured, installed shells will not see this release"
+          fi
+          gh release edit "$TAG" --draft=false --latest=false --repo "$REPO"
+
+      # `releases/latest/download/…` follows the repo's "latest" release, and that is cezar's own
+      # `v*` release — which carries no installers. The permanent URLs therefore hang off a
+      # ROLLING release, `desktop-latest`, whose tag and assets are replaced on every shell release.
+      - name: Refresh the rolling desktop-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir rolling
+          # Every installer or none: `--clobber` replaces by name, so a file missing here would
+          # leave the PREVIOUS release's asset under the same permanent URL — a download page
+          # that silently mixes versions.
+          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage; do
+            if ! gh release download "$TAG" --repo "$REPO" --pattern "$f" --dir rolling; then
+              echo "::error::$f is not on $TAG — desktop-latest left untouched"
+              exit 1
+            fi
+          done
+          # The updater manifest exists only when the signing key does; its absence is already
+          # warned about above and must not block the installers.
+          gh release download "$TAG" --repo "$REPO" --pattern desktop-latest.json --dir rolling 2>/dev/null || true
+          SHA=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
+          if gh release view desktop-latest --repo "$REPO" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/tags/desktop-latest" -f sha="$SHA" -F force=true >/dev/null
+            gh release edit desktop-latest --repo "$REPO" --title "cezar desktop (latest: v$VERSION)" \
+              --notes "Rolling pointer to the newest desktop release, [$TAG](https://github.com/$REPO/releases/tag/$TAG). Download links on this page never change." \
+              --latest=false
+          else
+            gh release create desktop-latest --repo "$REPO" --target "$SHA" --title "cezar desktop (latest: v$VERSION)" \
+              --notes "Rolling pointer to the newest desktop release, [$TAG](https://github.com/$REPO/releases/tag/$TAG). Download links on this page never change." \
+              --latest=false
+          fi
+          gh release upload desktop-latest rolling/* --clobber --repo "$REPO"
+
+      - name: Write workflow summary
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          REPO: ${{ github.repository }}
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          {
+            echo "## 🖥 cezar desktop v${VERSION}"
+            echo ""
+            echo "Release: https://github.com/${REPO}/releases/tag/${TAG}"
+            echo ""
+            echo "| Platform | Stable download |"
+            echo "|---|---|"
+            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage; do
+              echo "| \`$f\` | https://github.com/${REPO}/releases/download/desktop-latest/$f |"
+            done
+            echo ""
+            [ "$HAS_APPLE" = "true" ] || echo "⚠️ macOS builds are UNSIGNED (no APPLE_* secrets) — Gatekeeper will refuse them. Not fit for a landing page."
+            [ "$HAS_UPDATER_KEY" = "true" ] || echo "⚠️ No updater manifest (no TAURI_SIGNING_PRIVATE_KEY) — installed shells will not auto-update to this version."
+          } >> "$GITHUB_STEP_SUMMARY"
