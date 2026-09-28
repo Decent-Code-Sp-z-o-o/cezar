@@ -26,6 +26,8 @@
 </div>
 
 <p align="center">
+  <a href="https://cezar.run/">
+    <img alt="Website: cezar.run" src="https://img.shields.io/badge/website-cezar.run-9655FD" /></a>
   <a href="LICENSE">
     <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@open-mercato/cezar">
