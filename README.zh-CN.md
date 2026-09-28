@@ -1,13 +1,17 @@
-<div align="center">
-  <h1>Cezar：编排数百个 AI 编程智能体，7×24 小时不间断。</h1>
-</div>
+<p align="center">
+  <img src="docs/brand/cezar-icon-violet.svg" alt="cezar" width="96" />
+</p>
 
-<h4 align="center">
+<p align="center">
+  <b>Cezar：编排数百个 AI 编程智能体，7×24 小时不间断。</b>
+</p>
+
+<p align="center">
   <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">演示</a>&nbsp;·
   <a href="#快速开始">快速开始</a>&nbsp;·
   <a href="docs/reference.md">文档</a>&nbsp;·
   <a href="https://github.com/open-mercato/cezar/issues">问题反馈</a>
-</h4>
+</p>
 
 <p align="center">
   <a href="README.md">English</a> | 简体中文 | <a href="README.zh-TW.md">繁體中文</a>
@@ -15,13 +19,11 @@
 
 > 本文译自 README.md @ 33aee0ee；如有出入，以英文版为准。
 
-<div align="center">
-  <h2>
-    一个面向 Claude Code、Codex、OpenCode 及其他编程智能体的控制台。<br />
-    在本地或 VPS 上运行智能体，自动化多步骤工作流，<br />
-    并让它们在你离开时继续工作。
-  </h2>
-</div>
+<p align="center">
+  <b>一个面向 Claude Code、Codex、OpenCode 及其他编程智能体的控制台。</b><br />
+  在本地或 VPS 上运行智能体，自动化多步骤工作流，<br />
+  并让它们在你离开时继续工作。
+</p>
 
 <p align="center">
   <a href="LICENSE">
