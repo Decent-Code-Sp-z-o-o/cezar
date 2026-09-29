@@ -91,7 +91,7 @@ export function Overview({
               setPeriod(e.target.value === '30d' ? '30d' : '7d')
               setSelection(null)
             }}
-            className="min-h-11 rounded-md border bg-background px-3"
+            className="min-h-11 rounded-md border bg-background px-3 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>

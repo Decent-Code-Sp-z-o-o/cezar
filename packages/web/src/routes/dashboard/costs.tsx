@@ -34,6 +34,10 @@ const labels = {
   output: 'Output tokens',
 } as const
 type Sort = DashboardCosts['sort']
+/** The two pickers in this card. The focus half is the cockpit's ring (lime dark / ink light) —
+ *  a bare native `<select>` gets the browser's blue one instead, and blue means `--info` here. */
+const selectClass =
+  'min-h-11 rounded-md border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 function contentChanged(a: DashboardCosts, b: DashboardCosts) {
   return (
     JSON.stringify([a.totals, a.projects, a.tasks, a.visibility, a.coverage, a.invalidDateTasks]) !==
@@ -62,7 +66,7 @@ function SortSelect({
     <label className="flex min-h-11 items-center gap-2 text-sm">
       Sort by
       <select
-        className="min-h-11 rounded-md border bg-background px-3 text-sm"
+        className={selectClass}
         value={value}
         onChange={(e) => onChange(e.target.value as Sort)}
       >
@@ -223,7 +227,7 @@ function CostPeriod({
         <label className="flex min-h-11 items-center gap-2">
           Tasks created
           <select
-            className="min-h-11 rounded-md border bg-background px-3 text-sm"
+            className={selectClass}
             value={period}
             onChange={(e) => setPeriod(e.target.value as DashboardCosts['period'])}
           >

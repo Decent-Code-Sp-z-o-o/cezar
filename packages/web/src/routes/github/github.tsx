@@ -1061,7 +1061,7 @@ function GithubMergeBox({ number }: { number: number }) {
                 aria-label="Merge method"
                 value={selectedMethod ?? ''}
                 onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               >
                 {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
               </select>
@@ -1143,7 +1143,7 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
       <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0">
           <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm lg:hidden">
+          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
             {files.map((file) => <option key={file.path}>{file.path}</option>)}
           </select>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">

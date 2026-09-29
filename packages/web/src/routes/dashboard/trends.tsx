@@ -237,7 +237,7 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
         <label className="flex min-h-11 items-center gap-2 text-xs">
           Period
           <select
-            className="min-h-11 rounded-md border bg-background px-2 text-xs"
+            className="min-h-11 rounded-md border bg-background px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             value={period}
             onChange={(e) => setPeriod(e.target.value as TrendPeriod)}
           >
