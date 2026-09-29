@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, ty
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
+import { mergeRun } from './events'
 
 import {
   ApiError,
@@ -1432,8 +1433,22 @@ export function usePatchRun(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (patch: PatchRunInput) => patchRun(id, patch),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onSuccess: (updated) => {
+      writePatchedRunToCaches(queryClient, updated)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+    },
   })
+}
+
+/** Put a successful rename receipt into every project-scoped cache before refetching. */
+export function writePatchedRunToCaches(queryClient: QueryClient, updated: RunRecord): void {
+  queryClient.setQueryData<ApiRun[]>(queryKeys.runs.list(), (list) =>
+    list?.map((current) => (current.id === updated.id ? mergeRun(current, updated) : current)),
+  )
+  queryClient.setQueryData<ApiRun>(queryKeys.runs.detail(updated.id), (current) =>
+    current ? mergeRun(current, updated) : updated,
+  )
+  invalidateRunsIndex(queryClient)
 }
 
 /**
