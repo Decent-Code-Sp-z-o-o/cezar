@@ -2078,7 +2078,18 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
     await cez.api.v1.workspace.config.$get({}, init(opts)),
     '/workspace/config',
   )
-  return { ...answer, agentDefaults: answer.agentDefaults ?? {} }
+  return {
+    ...answer,
+    agentDefaults: answer.agentDefaults ?? {},
+    resources: {
+      ...answer.resources,
+      // Older servers omit this additive key; preserve an explicit null (disabled) while
+      // defaulting only an absent value.
+      idleTimeoutMinutes: answer.resources.idleTimeoutMinutes === undefined
+        ? 15
+        : answer.resources.idleTimeoutMinutes,
+    },
+  }
 }
 
 /**
