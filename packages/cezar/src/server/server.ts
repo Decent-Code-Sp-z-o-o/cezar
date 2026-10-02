@@ -1930,7 +1930,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, or pi' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
@@ -3251,6 +3251,7 @@ export function createApp(deps: ServerDeps) {
             opencode: z.string().trim().min(1).max(200).nullable().optional(),
             cursor: z.string().trim().min(1).max(200).nullable().optional(),
             pi: z.string().trim().min(1).max(200).nullable().optional(),
+            copilot: z.string().trim().min(1).max(200).nullable().optional(),
           })
           .optional(),
       })
@@ -6724,6 +6725,9 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     }
     case 'pi':
       return `pi --session ${sessionId}`;
+    case 'copilot':
+      // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
+      return `copilot --resume ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }
