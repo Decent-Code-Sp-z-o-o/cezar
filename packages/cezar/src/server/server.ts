@@ -68,6 +68,7 @@ import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
+import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -1154,10 +1155,11 @@ export function createApp(deps: ServerDeps) {
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
+      junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
     },
   });
-  const providerAuth = deps.providerAuth ?? new ProviderAuthService();
+  const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -1806,7 +1808,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, or cursor' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -3251,6 +3253,7 @@ export function createApp(deps: ServerDeps) {
             opencode: z.string().trim().min(1).max(200).nullable().optional(),
             cursor: z.string().trim().min(1).max(200).nullable().optional(),
             pi: z.string().trim().min(1).max(200).nullable().optional(),
+            junie: z.string().trim().min(1).max(200).nullable().optional(),
             copilot: z.string().trim().min(1).max(200).nullable().optional(),
           })
           .optional(),
@@ -6715,6 +6718,12 @@ export function quoteResumeBin(bin: string): string | null {
 export function resumeCommand(runner: string | undefined, sessionId: string): string | null {
   if (!isSafeSessionId(sessionId)) return null;
   switch (runner) {
+    case 'junie':
+      // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the LAST session;
+      // the target session is named by the separate `--session-id=<id>` flag, not a positional
+      // argument (junie's positional slot is `[<task>]`) — `junie --resume ${sessionId}` would
+      // silently resume the wrong session and read the id as a task prompt instead.
+      return `junie --resume --session-id=${sessionId}`;
     case 'codex':
       return `codex resume ${sessionId}`;
     case 'opencode':
