@@ -467,7 +467,7 @@ export function NewTaskRoute() {
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = async (text: string, images: AttachmentInput[]) => {
+  const submit = async (text: string, submitted: AttachmentInput[]) => {
     if (!providersReady || runner === null) {
       throw new Error(
         providers.isPending
@@ -488,8 +488,9 @@ export function NewTaskRoute() {
       // overlay is deliberate: it's where steps are edited and saved as a reusable chain.
       setPlanning(true)
       try {
-        setPlan(pendingPlanOf(text, images, await postPlan(text)))
+        setPlan(pendingPlanOf(text, submitted, await postPlan(text)))
         update({ text })
+        setImages(images)
       } finally {
         setPlanning(false)
       }
@@ -506,7 +507,7 @@ export function NewTaskRoute() {
         agentProfile,
         defaultRunner,
         variants,
-        images,
+        images: submitted,
         worktree: worktreeOn,
         autonomous: autonomousOn,
         generateFollowups: generateFollowupsOn,
@@ -577,6 +578,7 @@ export function NewTaskRoute() {
           .catch(() => {})
       }
       clearStartedDraft(draftProjectId)
+      setImages([])
       setPlan(null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       navigate(startedRunPath(created))
