@@ -2034,6 +2034,22 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(events.filter((event) => event.type === 'text').some((event) => String(event.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
 
+  // The 4-question / 4-option caps came from AskUserQuestion parity, and a live run paid for
+  // them: five legitimate decisions, payload refused, questions shown to the user as raw JSON.
+  it('renders a card past the old 4/4 caps — six questions, six options', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-many choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((event) => event.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{ options: unknown[] }>;
+    expect(questions).toHaveLength(6);
+    expect(questions[0]!.options).toHaveLength(6);
+    // A rendered card replaces the marker; a refused one used to leave it in the text.
+    expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
+
   it('a markerless turn-end raises no ask.requested', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
     currentId = record.id;

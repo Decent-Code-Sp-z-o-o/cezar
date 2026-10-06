@@ -15,7 +15,7 @@ import {
   DEFAULT_RUN_TIMEOUT_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
-import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { ASK_MAX_QUESTIONS, parseAskRequest, type AskQuestion } from './ask.ts';
 import { readNdjson } from './ndjson.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
@@ -627,8 +627,17 @@ class CodexSession implements AgentSession {
 
 // ---- helpers --------------------------------------------------------------
 
+/**
+ * Map Codex's native `requestUserInput` questions onto the portable ask shape.
+ * `parseAskRequest` at the end is what decides validity; the length guard here
+ * only keeps the mapping work bounded, so a frame claiming a hundred thousand
+ * questions is refused before each one is walked and allocated. It reads the
+ * shared `ASK_MAX_QUESTIONS` rather than its own number — the line used to say
+ * `value.length > 4`, which is exactly the kind of copy that stays behind when
+ * the schema moves. The low end stays with the schema (`min(1)`).
+ */
 function codexAskQuestions(value: unknown): AskQuestion[] | null {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null;
+  if (!Array.isArray(value) || value.length > ASK_MAX_QUESTIONS) return null;
   const questions: unknown[] = [];
   for (const raw of value) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;

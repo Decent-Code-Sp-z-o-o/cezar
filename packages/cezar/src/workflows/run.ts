@@ -40,6 +40,7 @@ import {
   attachmentExtension,
   isImageAttachmentName,
   isImageMediaType,
+  PENDING_ASK_MAX_QUESTIONS,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
@@ -2019,15 +2020,28 @@ export class RunManager {
    * question: a restart-forced settle reports it `blocked` instead of `done`. Cleared by
    * `deliverMessage` when an answer reaches the session. A child parked on the Guard is told to its
    * parent through the inbox — the parent cannot answer for the human, but it can re-plan.
+   *
+   * A card may carry up to `ASK_MAX_QUESTIONS` questions, but the RECORD carries at most
+   * `PENDING_ASK_MAX_QUESTIONS` of their texts plus a count of the rest: that field is read back
+   * by an all-or-nothing index parser, and an over-long list in a newly written `runs.json` would
+   * cost an older cezar its entire project index. The inbox message below is a markdown file under
+   * no schema, so the parent still reads every question.
    */
   private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): void {
     const requestId = emitAskRequested(sink, ask);
     const dispatch = this.dispatchOf(runId);
     if (!dispatch) return;
     const questions = ask.questions.map((question) => question.question.slice(0, 400));
+    const recorded = questions.slice(0, PENDING_ASK_MAX_QUESTIONS);
+    const omittedQuestions = questions.length - recorded.length;
     this.updateDispatch(runId, (current) => ({
       ...current,
-      pendingAsk: { requestId, questions, askedAt: new Date().toISOString() },
+      pendingAsk: {
+        requestId,
+        questions: recorded,
+        ...(omittedQuestions > 0 ? { omittedQuestions } : {}),
+        askedAt: new Date().toISOString(),
+      },
     }));
     if (!dispatch.parentRunId) return;
     const run = this.store.getRun(runId);
