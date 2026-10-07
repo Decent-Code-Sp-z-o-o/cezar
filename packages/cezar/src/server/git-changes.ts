@@ -458,17 +458,27 @@ export interface DirEntry {
 
 export type FilesResult =
   | { kind: 'dir'; path: string; entries: DirEntry[] }
-  | { kind: 'file'; path: string; size: number; binary: boolean; tooLarge: boolean; content?: string }
+  | {
+      kind: 'file';
+      path: string;
+      size: number;
+      binary: boolean;
+      tooLarge: boolean;
+      /** Present when the raw mode will serve this file's bytes for an inline preview —
+       *  extension on the `PREVIEW_MIME` allowlist AND size within `RAW_PREVIEW_CAP`. The
+       *  client renders this verdict instead of re-deriving the allowlist. */
+      preview?: RawPreviewKind;
+      content?: string;
+    }
   | { kind: 'invalid'; error: string }
   | { kind: 'missing'; error: string };
 
 /**
- * Extensions the Files tab renders inline as `<img>` — the only kinds the
- * `/files?raw=1` mode will ever serve as bytes (anything else stays JSON, so a
- * worktree HTML file can never become a same-origin document). SVG is included:
- * inert inside `<img>`, and the raw response carries a no-script CSP for the
- * "opened the URL directly" case. Keep in sync with IMAGE_EXTENSIONS in
- * web/app/src/routes/task-git/file-preview.tsx.
+ * Image extensions the Files tab renders inline as `<img>`. SVG is included: inert inside
+ * `<img>`, and the raw response carries a no-script CSP for the "opened the URL directly"
+ * case. This is the IMAGE subset of the raw route's allowlist — `PREVIEW_MIME` below is the
+ * full one, composed from this map so the two cannot drift; the client renders the verdict
+ * the server ships in the file entry's `preview` field rather than re-deriving it.
  */
 const IMAGE_MIME: Record<string, string> = {
   png: 'image/png',
@@ -488,6 +498,59 @@ export function imageMimeType(path: string): string | null {
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return null;
   return IMAGE_MIME[name.slice(dot + 1).toLowerCase()] ?? null;
+}
+
+/** The browser-renderable kinds the raw mode serves — mirrors the contract's `preview` enum. */
+export type RawPreviewKind = 'image' | 'pdf' | 'video' | 'audio' | 'html';
+
+/**
+ * Max bytes the raw mode serves for a previewable file. PDFs, video and audio are routinely
+ * far larger than `FILE_CONTENT_CAP`, which stays the TEXT content cap (JSON `content`, diff
+ * faces, highlighting) — past this the file entry carries no `preview` and the raw mode 409s.
+ */
+export const RAW_PREVIEW_CAP = 25_000_000;
+
+/**
+ * The full raw-mode allowlist: everything the browser itself renders without cezar shipping a
+ * renderer — images (`IMAGE_MIME`, spread in so the subset cannot drift), PDF (the browser's
+ * own viewer), video and audio (the `<video>`/`<audio>` elements) and HTML. HTML earns its
+ * entry ONLY through the raw response's headers: `nosniff` plus a `sandbox` CSP make every
+ * byte answer a unique-origin, script-less document — served to an `<iframe sandbox>` in the
+ * preview, and never a same-origin scriptable page even opened as a top-level URL. `?raw=1`
+ * is still the client's explicit ask for bytes; the `Accept` negotiation (server.ts) keeps
+ * negotiating images only, which is the surface the `<img>` path relies on.
+ */
+const PREVIEW_MIME: Record<string, { mime: string; kind: RawPreviewKind }> = {
+  ...Object.fromEntries(
+    Object.entries(IMAGE_MIME).map(([ext, mime]) => [ext, { mime, kind: 'image' as const }]),
+  ),
+  pdf: { mime: 'application/pdf', kind: 'pdf' },
+  mp4: { mime: 'video/mp4', kind: 'video' },
+  m4v: { mime: 'video/mp4', kind: 'video' },
+  webm: { mime: 'video/webm', kind: 'video' },
+  mov: { mime: 'video/quicktime', kind: 'video' },
+  mp3: { mime: 'audio/mpeg', kind: 'audio' },
+  wav: { mime: 'audio/wav', kind: 'audio' },
+  ogg: { mime: 'audio/ogg', kind: 'audio' },
+  opus: { mime: 'audio/opus', kind: 'audio' },
+  m4a: { mime: 'audio/mp4', kind: 'audio' },
+  flac: { mime: 'audio/flac', kind: 'audio' },
+  aac: { mime: 'audio/aac', kind: 'audio' },
+  html: { mime: 'text/html; charset=utf-8', kind: 'html' },
+  htm: { mime: 'text/html; charset=utf-8', kind: 'html' },
+};
+
+/**
+ * The raw-serving verdict for a path: `{ mime, kind }` when its extension is on the
+ * `PREVIEW_MIME` allowlist, null otherwise. Size (the other half of the verdict) is the
+ * caller's — `readWorktreePath` folds both into the file entry's `preview` field, and the
+ * raw route re-asks here with the file's actual size against `RAW_PREVIEW_CAP`.
+ */
+export function previewMimeType(path: string): { mime: string; kind: RawPreviewKind } | null {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return null;
+  return PREVIEW_MIME[name.slice(dot + 1).toLowerCase()] ?? null;
 }
 
 /**
@@ -538,6 +601,7 @@ export async function readWorktreePath(
   root: string,
   relPath: string,
   contentCap = FILE_CONTENT_CAP,
+  rawCap = RAW_PREVIEW_CAP,
 ): Promise<FilesResult> {
   if (relPath.includes('\0')) return { kind: 'invalid', error: 'invalid path' };
   const rootAbs = resolve(root);
@@ -599,11 +663,16 @@ export async function readWorktreePath(
 
   const binary = await sniffBinary(target, info.size).catch(() => true);
   const tooLarge = info.size > contentCap;
+  // The raw-serving verdict rides along on every file answer, binary or text: a PDF is
+  // `binary: true` AND `preview: 'pdf'` — withheld as text, served as bytes.
+  const preview = previewMimeType(display);
+  const previewField =
+    preview !== null && info.size <= rawCap ? { preview: preview.kind } : {};
   if (binary || tooLarge) {
-    return { kind: 'file', path: display, size: info.size, binary, tooLarge };
+    return { kind: 'file', path: display, size: info.size, binary, tooLarge, ...previewField };
   }
   const content = await readFile(target, 'utf8');
-  return { kind: 'file', path: display, size: info.size, binary: false, tooLarge: false, content };
+  return { kind: 'file', path: display, size: info.size, binary: false, tooLarge: false, content, ...previewField };
 }
 
 // ---- branches -------------------------------------------------------------

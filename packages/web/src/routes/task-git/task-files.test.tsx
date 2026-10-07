@@ -55,14 +55,19 @@ const ROOT: WorktreeEntry = {
     { name: 'blob.dat', type: 'file', size: 4096 },
     { name: 'hello.ts', type: 'file', size: 27 },
     { name: 'logo.png', type: 'file', size: 2048 },
+    { name: 'report.pdf', type: 'file', size: 4096 },
+    { name: 'page.html', type: 'file', size: 512 },
   ],
 }
 
 const FILES: Record<string, WorktreeEntry> = {
   src: { type: 'dir', path: 'src', entries: [{ name: 'nested.md', type: 'file', size: 8 }] },
-  'src%2Fnested.md': { type: 'file', path: 'src/nested.md', size: 8, binary: false, tooLarge: false, content: '# hello\n' },
+  'src%2Fnested.md': { type: 'file', path: 'src/nested.md', size: 8, binary: false, tooLarge: false, content: '# hello\n\nworld' },
   'hello.ts': { type: 'file', path: 'hello.ts', size: 27, binary: false, tooLarge: false, content: "export const hi = 'world'\n" },
-  'logo.png': { type: 'file', path: 'logo.png', size: 2048, binary: true, tooLarge: false },
+  // The preview kinds come from the server's `preview` field — the client never re-derives them.
+  'logo.png': { type: 'file', path: 'logo.png', size: 2048, binary: true, tooLarge: false, preview: 'image' },
+  'report.pdf': { type: 'file', path: 'report.pdf', size: 4096, binary: true, tooLarge: false, preview: 'pdf' },
+  'page.html': { type: 'file', path: 'page.html', size: 512, binary: false, tooLarge: false, content: '<p>hi</p>', preview: 'html' },
   'big.txt': { type: 'file', path: 'big.txt', size: 900_000, binary: false, tooLarge: true },
   'blob.dat': { type: 'file', path: 'blob.dat', size: 4096, binary: true, tooLarge: false },
 }
@@ -128,7 +133,7 @@ describe('the Files tab route', () => {
     const rows = [...document.querySelectorAll('[data-slot="files-dir"], [data-slot="files-file"]')].map(
       (el) => (el as HTMLElement).dataset.path,
     )
-    expect(rows).toEqual(['src', 'big.txt', 'blob.dat', 'hello.ts', 'logo.png'])
+    expect(rows).toEqual(['src', 'big.txt', 'blob.dat', 'hello.ts', 'logo.png', 'report.pdf', 'page.html'])
     // Nothing selected yet — the pane says so instead of pretending.
     expect(screen.getByRole('heading', { level: 2, name: 'Select a file' })).toBeTruthy()
     // Desktop only: the tree owns its scroller so a deep tree never drags the preview along.
@@ -217,6 +222,55 @@ describe('the Files tab route', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { level: 2, name: 'Binary file' })).toBeTruthy(),
     )
+  })
+
+  it('a markdown file renders as formatted text with a Rendered | Source toggle', async () => {
+    stubFetch()
+    renderFilesRoute()
+    // The src directory is lazy — its rows exist only once it is expanded.
+    await waitFor(() => expect(treeButton('files-dir', 'src')).not.toBeNull())
+    fireEvent.click(treeButton('files-dir', 'src')!)
+    await openFile('src/nested.md')
+
+    // Rendered by default (spec 2026-10-05-repo-file-browser Q8): the heading is real markup.
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-markdown"]')).not.toBeNull())
+    const rendered = document.querySelector('[data-slot="file-preview-markdown"]') as HTMLElement
+    expect(rendered.querySelector('h1')?.textContent).toBe('hello')
+
+    // Source flips to the Shiki code path and back.
+    const source = document.querySelector('[data-slot="file-preview-view-toggle"] [data-view="source"]') as HTMLButtonElement
+    expect(source.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(source)
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-code"]')).not.toBeNull())
+    expect((document.querySelector('[data-slot="file-preview-code"]') as HTMLElement).textContent).toContain('# hello')
+    const renderedButton = document.querySelector('[data-slot="file-preview-view-toggle"] [data-view="rendered"]') as HTMLButtonElement
+    fireEvent.click(renderedButton)
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-markdown"]')).not.toBeNull())
+  })
+
+  it('a pdf renders in the browser viewer through the raw URL, with an open-raw link', async () => {
+    stubFetch()
+    renderFilesRoute()
+    await openFile('report.pdf')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-pdf"]')).not.toBeNull())
+    const frame = document.querySelector('[data-slot="file-preview-pdf"]') as HTMLIFrameElement
+    expect(frame.getAttribute('src')).toBe('/api/v1/runs/r1/files?path=report.pdf&raw=1')
+    expect(frame.getAttribute('title')).toBe('report.pdf')
+    const openRaw = document.querySelector('[data-slot="file-preview-open-raw"]') as HTMLAnchorElement
+    expect(openRaw.getAttribute('href')).toBe('/api/v1/runs/r1/files?path=report.pdf&raw=1')
+    expect(openRaw.getAttribute('rel')).toBe('noreferrer')
+  })
+
+  it('an html file previews as a static document — the iframe is fully sandboxed', async () => {
+    stubFetch()
+    renderFilesRoute()
+    await openFile('page.html')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-html"]')).not.toBeNull())
+    const frame = document.querySelector('[data-slot="file-preview-html"]') as HTMLIFrameElement
+    expect(frame.getAttribute('sandbox')).toBe('')
+    expect(frame.getAttribute('src')).toBe('/api/v1/runs/r1/files?path=page.html&raw=1')
   })
 
   it('a per-file 409 shows the server words as a refusal, not an outage', async () => {

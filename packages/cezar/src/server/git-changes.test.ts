@@ -8,6 +8,7 @@ import { RunStore, type RunRecord } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import {
   FILE_CONTENT_CAP,
+  RAW_PREVIEW_CAP,
   assemblePayload,
   collectChanges,
   collectRunCommits,
@@ -16,6 +17,7 @@ import {
   imageMimeType,
   isOsOpenableImage,
   patchByPath,
+  previewMimeType,
   pushCurrentBranch,
   readWorktreePath,
   splitPatch,
@@ -432,6 +434,36 @@ describe('readWorktreePath — Files tab browsing', () => {
     if (res.kind === 'file') expect(res.content).toBeUndefined();
   });
 
+  it('marks browser-renderable files with a preview verdict — binary or text alike', async () => {
+    writeFileSync(join(dir, 'spec.pdf'), Buffer.from('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n\0'));
+    writeFileSync(join(dir, 'README.md'), '# Title\n');
+    writeFileSync(join(dir, 'page.html'), '<p>hi</p>\n');
+    writeFileSync(join(dir, 'clip.mp4'), Buffer.from([0, 0, 0, 24, 102, 116, 121, 112, 0]));
+    writeFileSync(join(dir, 'tone.mp3'), Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, 0]));
+    writeFileSync(join(dir, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0]));
+    writeFileSync(join(dir, 'notes.txt'), 'plain\n');
+
+    expect(await readWorktreePath(dir, 'spec.pdf')).toMatchObject({ kind: 'file', binary: true, preview: 'pdf' });
+    // Markdown is presentation-only: its text content ships as usual, no raw verdict needed.
+    const md = await readWorktreePath(dir, 'README.md');
+    expect(md).toMatchObject({ kind: 'file', binary: false, content: '# Title\n' });
+    if (md.kind === 'file') expect(md.preview).toBeUndefined();
+    expect(await readWorktreePath(dir, 'page.html')).toMatchObject({ kind: 'file', binary: false, preview: 'html' });
+    expect(await readWorktreePath(dir, 'clip.mp4')).toMatchObject({ kind: 'file', binary: true, preview: 'video' });
+    expect(await readWorktreePath(dir, 'tone.mp3')).toMatchObject({ kind: 'file', binary: true, preview: 'audio' });
+    expect(await readWorktreePath(dir, 'logo.png')).toMatchObject({ kind: 'file', binary: true, preview: 'image' });
+    const txt = await readWorktreePath(dir, 'notes.txt');
+    expect(txt).toMatchObject({ kind: 'file' });
+    if (txt.kind === 'file') expect(txt.preview).toBeUndefined();
+  });
+
+  it('withholds the preview verdict past the raw cap — the honest no-preview states win', async () => {
+    writeFileSync(join(dir, 'spec.pdf'), Buffer.from('%PDF-1.4\0'));
+    const res = await readWorktreePath(dir, 'spec.pdf', FILE_CONTENT_CAP, 4);
+    expect(res).toMatchObject({ kind: 'file', tooLarge: false, size: 9 });
+    if (res.kind === 'file') expect(res.preview).toBeUndefined();
+  });
+
   it('rejects traversal, absolute paths, .git and symlinks', async () => {
     expect((await readWorktreePath(dir, '../outside.txt')).kind).toBe('invalid');
     expect((await readWorktreePath(dir, 'sub/../../outside.txt')).kind).toBe('invalid');
@@ -459,7 +491,7 @@ describe('readWorktreePath — Files tab browsing', () => {
   });
 });
 
-describe('imageMimeType — the raw-serving allowlist (R5 Step 1.6)', () => {
+describe('imageMimeType — the IMAGE subset of the raw allowlist (R5 Step 1.6)', () => {
   it('maps image extensions case-insensitively', () => {
     expect(imageMimeType('logo.png')).toBe('image/png');
     expect(imageMimeType('deep/dir/Photo.JPEG')).toBe('image/jpeg');
@@ -468,12 +500,34 @@ describe('imageMimeType — the raw-serving allowlist (R5 Step 1.6)', () => {
     expect(imageMimeType('anim.webp')).toBe('image/webp');
   });
 
-  it('answers null for everything else — non-images never leave as bytes', () => {
+  it('answers null for everything else — this helper feeds the OS launcher, never wider', () => {
     expect(imageMimeType('index.html')).toBeNull();
     expect(imageMimeType('script.js')).toBeNull();
     expect(imageMimeType('README')).toBeNull();
     expect(imageMimeType('.png')).toBeNull(); // a dotfile named ".png" is not an image
     expect(imageMimeType('archive.png.zip')).toBeNull();
+  });
+});
+
+describe('previewMimeType — the full raw-serving allowlist (R5 Step 1.6, preview extension)', () => {
+  it('covers everything the browser renders: images, pdf, video, audio, html', () => {
+    expect(previewMimeType('logo.png')).toMatchObject({ mime: 'image/png', kind: 'image' });
+    expect(previewMimeType('spec.PDF')).toMatchObject({ mime: 'application/pdf', kind: 'pdf' });
+    expect(previewMimeType('clip.mp4')).toMatchObject({ mime: 'video/mp4', kind: 'video' });
+    expect(previewMimeType('clip.webm')).toMatchObject({ kind: 'video' });
+    expect(previewMimeType('tone.mp3')).toMatchObject({ mime: 'audio/mpeg', kind: 'audio' });
+    expect(previewMimeType('voice.m4a')).toMatchObject({ kind: 'audio' });
+    expect(previewMimeType('page.html')).toMatchObject({ mime: 'text/html; charset=utf-8', kind: 'html' });
+    expect(previewMimeType('page.htm')).toMatchObject({ kind: 'html' });
+  });
+
+  it('answers null for what the browser does not render — those stay JSON or a refusal', () => {
+    expect(previewMimeType('script.js')).toBeNull();
+    expect(previewMimeType('bundle.css')).toBeNull();
+    expect(previewMimeType('archive.zip')).toBeNull();
+    expect(previewMimeType('README')).toBeNull();
+    expect(previewMimeType('.pdf')).toBeNull(); // a dotfile named ".pdf" is not a pdf
+    expect(previewMimeType('backup.tar.gz')).toBeNull(); // last extension wins: .gz
   });
 });
 
@@ -703,20 +757,53 @@ describe('session git API routes', () => {
     expect(Buffer.from(await res.arrayBuffer()).equals(PNG)).toBe(true);
   });
 
-  it('GET /files?raw=1 refuses non-images — a worktree HTML file can never become a document', async () => {
-    writeFileSync(join(worktree, 'page.html'), '<script>alert(1)</script>\n');
-    const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=page.html&raw=1`);
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: string }).error).toContain('limited to images');
+  it('GET /files?raw=1 serves pdf bytes to the browser viewer', async () => {
+    const pdf = Buffer.from('%PDF-1.4\n1 0 obj\n%%EOF\n');
+    writeFileSync(join(worktree, 'spec.pdf'), pdf);
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=spec.pdf&raw=1`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(Buffer.from(await res.arrayBuffer()).equals(pdf)).toBe(true);
   });
 
-  it('GET /files?raw=1 refuses images past the size cap with a reason', async () => {
-    const huge = Buffer.alloc(FILE_CONTENT_CAP + 1);
-    PNG.copy(huge); // PNG magic up front, NULs after — binary, image extension, over cap
+  it('GET /files?raw=1 serves html as a sandboxed static document — never a same-origin scriptable page', async () => {
+    writeFileSync(join(worktree, 'page.html'), '<script>alert(1)</script>\n');
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=page.html&raw=1`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    // The sandbox CSP is what earns text/html its allowlist entry: the document is unique-origin
+    // and script-less whether it lands in the preview's `<iframe sandbox>` or a top-level tab.
+    expect(res.headers.get('content-security-policy')).toContain('sandbox');
+  });
+
+  it('GET /files?raw=1 refuses non-previewable types — and says so in its own words', async () => {
+    writeFileSync(join(worktree, 'blob.dat'), Buffer.from([0, 1, 2, 0]));
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=blob.dat&raw=1`);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain('limited to previewable file types');
+  });
+
+  it('GET /files?raw=1 refuses files past the raw cap with a reason', async () => {
+    const huge = Buffer.alloc(RAW_PREVIEW_CAP + 1);
+    PNG.copy(huge); // PNG magic up front, NULs after — binary, image extension, over the raw cap
     writeFileSync(join(worktree, 'huge.png'), huge);
     const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=huge.png&raw=1`);
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toContain('too large');
+  });
+
+  it('GET /files JSON carries the server preview verdict; markdown stays plain text', async () => {
+    writeFileSync(join(worktree, 'spec.pdf'), Buffer.from('%PDF-1.4\0'));
+    writeFileSync(join(worktree, 'README.md'), '# hi\n');
+    const pdfMeta = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=spec.pdf`);
+    expect(pdfMeta.status).toBe(200);
+    expect((await pdfMeta.json()) as object).toMatchObject({ type: 'file', binary: true, preview: 'pdf' });
+    const mdMeta = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=README.md`);
+    const md = (await mdMeta.json()) as { preview?: string; content?: string };
+    expect(md.content).toBe('# hi\n');
+    expect(md.preview).toBeUndefined();
   });
 
   it('GET /files?raw=1 still rejects traversal with a 409', async () => {
@@ -783,26 +870,42 @@ describe('session git API routes', () => {
     expect((await res.json()) as object).toMatchObject({ type: 'dir', path: '' });
   });
 
-  it('an image Accept on a NON-image falls back to JSON — only `raw=1` earns the 409', async () => {
-    writeFileSync(join(worktree, 'page.html'), '<script>alert(1)</script>\n');
+  it('an image Accept on a NON-previewable file falls back to JSON — only `raw=1` earns the 409', async () => {
+    writeFileSync(join(worktree, 'blob.dat'), Buffer.from([0, 1, 2, 0]));
     // A preference the resource cannot satisfy is not an error: a browser navigating here (its
     // Accept lists image/avif & co at q=1) must still see the metadata it saw before.
+    const negotiated = await files('path=blob.dat', 'image/avif,image/webp,image/*,*/*;q=0.8');
+    expect(negotiated.status).toBe(200);
+    expect((await negotiated.json()) as object).toMatchObject({ type: 'file', path: 'blob.dat' });
+    // The flag still says why, verbatim — that 409 is the protected surface.
+    const asked = await files('path=blob.dat&raw=1', 'image/*');
+    expect(asked.status).toBe(409);
+    expect(((await asked.json()) as { error: string }).error).toContain('limited to previewable file types');
+  });
+
+  it('an image Accept keeps negotiating IMAGES only — the wider preview types are flag-driven', async () => {
+    writeFileSync(join(worktree, 'page.html'), '<script>alert(1)</script>\n');
+    // Pre-widening this answered JSON and still does: Accept never widens its own surface.
     const negotiated = await files('path=page.html', 'image/avif,image/webp,image/*,*/*;q=0.8');
     expect(negotiated.status).toBe(200);
     expect((await negotiated.json()) as object).toMatchObject({ type: 'file', path: 'page.html' });
-    // The flag still says why, verbatim — that 409 is the protected surface.
+    // The flag unlocks it, sandboxed like every raw answer.
     const asked = await files('path=page.html&raw=1', 'image/*');
-    expect(asked.status).toBe(409);
-    expect(((await asked.json()) as { error: string }).error).toContain('limited to images');
+    expect(asked.status).toBe(200);
+    expect(asked.headers.get('content-type')).toContain('text/html');
+    expect(asked.headers.get('content-security-policy')).toContain('sandbox');
   });
 
   it('an over-cap image negotiates back to JSON, but `raw=1` still 409s with the size reason', async () => {
-    const huge = Buffer.alloc(FILE_CONTENT_CAP + 1);
+    const huge = Buffer.alloc(RAW_PREVIEW_CAP + 1);
     PNG.copy(huge);
     writeFileSync(join(worktree, 'huge.png'), huge);
     const negotiated = await files('path=huge.png', 'image/*');
     expect(negotiated.status).toBe(200);
-    expect((await negotiated.json()) as object).toMatchObject({ type: 'file', tooLarge: true });
+    const meta = (await negotiated.json()) as { tooLarge?: boolean; preview?: string };
+    // Over the raw cap the server withholds BOTH the bytes and the preview verdict.
+    expect(meta).toMatchObject({ type: 'file', tooLarge: true });
+    expect(meta.preview).toBeUndefined();
     const asked = await files('path=huge.png&raw=1', 'image/*');
     expect(asked.status).toBe(409);
     expect(((await asked.json()) as { error: string }).error).toContain('too large');

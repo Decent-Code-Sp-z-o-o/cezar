@@ -49,7 +49,6 @@ import {
   type PickVariantResponse,
   type RunIndexEntry,
   type RunsIndexResponse,
-  type StarCountPayload,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
@@ -98,7 +97,6 @@ import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
 import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
-import { StarCountReader } from './star-count.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -144,7 +142,9 @@ import {
   createOrSwitchBranch,
   imageMimeType,
   isOsOpenableImage,
+  previewMimeType,
   pushCurrentBranch,
+  RAW_PREVIEW_CAP,
   readWorktreePath,
 } from './git-changes.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
@@ -310,10 +310,6 @@ export interface ServerDeps {
    *  the CLI, which knows the entry file, the port and how to restart; absent in tests and for
    *  bare `createApp` callers, where the family answers a read-only "not available" status. */
   selfUpdate?: SelfUpdateService;
-  /** cezar's own GitHub star count behind `GET /api/v1/star-count` (the cockpit's ⭐ ask).
-   *  Defaults to a reader that asks github.com at most once per six hours and caches the answer
-   *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
-  starCount?: { read(): Promise<StarCountPayload> };
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -854,11 +850,9 @@ const uiStateSchema = z
       )
       .max(50)
       .optional(),
-    // Skills promo banner (#391): set once the cockpit banner is dismissed, never unset.
-    // Server-persisted (not a cookie) so the "shown once" promise holds across browsers.
-    // Retained for backward compatibility — the banner is gone, replaced by the workspace-level
-    // `importedSkills` curation (see `workspaceUiStateSchema`); `.passthrough()` would preserve
-    // the key regardless, but keep it typed.
+    // Legacy key from the retired skills promo banner (#391): nothing reads or writes it today.
+    // Retained so an old ui-state.json still round-trips; `.passthrough()` would preserve the
+    // key regardless, but keep it typed.
     dismissedSkillsBanner: z.boolean().optional(),
   })
   .passthrough();
@@ -1115,7 +1109,8 @@ const COMMIT_FORMATS = ['text/plain', 'application/json'] as const;
 
 /** What `GET /runs/:id/files` offers, DEFAULT FIRST. `image/*` rather than a concrete type: which
  *  image type the bytes are is only known once the path resolves, and the raw branch refuses
- *  everything that is not an image anyway. */
+ *  anything but images on the Accept path anyway — the wider preview types (pdf, video, audio,
+ *  html) are flag-driven (`?raw=1`) only, which is what the preview's `<iframe>`/`<video>` ask with. */
 const FILE_FORMATS = ['application/json', 'image/*'] as const;
 
 /** Workspace-root writability probe (multi-project spec, "API Contracts"):
@@ -1226,7 +1221,6 @@ export function createApp(deps: ServerDeps) {
       readOnly: true,
       trimPaths: () => !capabilities().localHandoff,
     });
-  const starCount = deps.starCount ?? new StarCountReader();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -2988,12 +2982,6 @@ export function createApp(deps: ServerDeps) {
   // registry, so the request cannot inject code, and a VPS behind the installer's Basic auth
   // is exactly where "update from the cockpit" replaces `cezar server-deploy` — but hosted
   // applies are FORWARD-ONLY (see the guard on /apply below).
-  // ---- chained family: the star ask (workspace-level) ----------------------
-  // cezar's own star count, for the cockpit's ⭐ button. Workspace-level and single-mount, like
-  // `/health`: it says nothing about any project, and there is nothing for a project scope to
-  // change about it. Never fails — `{ available: false }` is the ordinary offline answer, so the
-  // cockpit's chip simply is not there rather than showing an error nobody asked for.
-  const starCountRoutes = new Hono().get('/star-count', async (c) => c.json(await starCount.read()));
 
   const selfUpdateRoutes = new Hono()
     .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
@@ -4682,9 +4670,12 @@ export function createApp(deps: ServerDeps) {
     // Files tab: directory listing (path omitted or a dir) or file content
     // (size-capped, binary flagged). Traversal-safe — readWorktreePath rejects
     // anything escaping the worktree. `raw=1` (R5 Step 1.6) serves the BYTES of
-    // image files only, for the preview's inline <img> — never HTML/JS/etc., so
-    // no worktree file can become a same-origin document, and never past the
-    // size cap. The no-script CSP neutralizes SVG opened as a top-level URL.
+    // the previewable file types (`PREVIEW_MIME` in git-changes.ts: images, pdf,
+    // video, audio, html) up to RAW_PREVIEW_CAP, for the preview's inline
+    // <img>/<iframe>/<video>/<audio>. The no-script + sandbox CSP and `nosniff`
+    // make every byte answer a unique-origin, script-less document — that is what
+    // earns `text/html` its allowlist entry: a worktree HTML file can never become
+    // a same-origin scriptable document, however it is opened.
     //
     // An `Accept` that asks for images reaches the same raw branch without the flag — which is
     // what an `<img>` sends — while the flag still wins whenever it is present and `*<slash>*`
@@ -4693,10 +4684,12 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const query = c.req.valid('query');
       c.header('vary', 'Accept');
+      // The FLAG is the only way to ask for the wider preview types; an `Accept` keeps
+      // negotiating images only — exactly the surface it negotiated before the allowlist widened.
+      const flagged = query.raw === '1';
+      // Present-but-not-`1` is an explicit opt-out: neither the flag nor Accept re-decides it.
       const wantsRaw =
-        query.raw !== undefined
-          ? query.raw === '1'
-          : negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*';
+        flagged || (query.raw === undefined && negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
@@ -4716,26 +4709,28 @@ export function createApp(deps: ServerDeps) {
         });
       }
       if (wantsRaw) {
-        const mime = imageMimeType(result.path);
-        if (mime === null || result.tooLarge) {
-          // `?raw=1` ASKED for bytes, so it hears why it cannot have them — that 409 and its
-          // wording are the protected surface (§2). An `Accept` is only a preference, so a
-          // resource with no image representation falls THROUGH to the JSON answer below rather
-          // than turning a browser's navigation to a text file into an error.
-          if (query.raw !== undefined) {
-            const error =
-              mime === null
-                ? `raw serving is limited to images: ${result.path}`
-                : `file too large to serve raw (${result.size} bytes): ${result.path}`;
-            return c.json({ error }, 409);
-          }
-        } else {
+        const preview = previewMimeType(result.path);
+        // Accept-negotiated asks stay on the image surface the `<img>` path relies on; the flag
+        // unlocks the wider preview allowlist (pdf, video, audio, html).
+        const allowed = preview !== null && (flagged || preview.kind === 'image');
+        if (allowed && result.size <= RAW_PREVIEW_CAP) {
           const bytes = await readFile(join(workingDirectory, result.path));
           return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
-            'content-type': mime,
+            'content-type': preview.mime,
             'x-content-type-options': 'nosniff',
             'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
           });
+        }
+        // `?raw=1` ASKED for bytes, so it hears why it cannot have them — that 409 and its
+        // wording are the protected surface (§2). An `Accept` is only a preference, so a
+        // resource it cannot be served falls THROUGH to the JSON answer below rather than
+        // turning a browser's navigation to a text file into an error.
+        if (flagged) {
+          const error =
+            preview === null
+              ? `raw serving is limited to previewable file types (images, pdf, video, audio, html): ${result.path}`
+              : `file too large to serve raw (${result.size} bytes): ${result.path}`;
+          return c.json({ error }, 409);
         }
       }
       return c.json({
@@ -4744,6 +4739,7 @@ export function createApp(deps: ServerDeps) {
         size: result.size,
         binary: result.binary,
         tooLarge: result.tooLarge,
+        ...(result.preview !== undefined ? { preview: result.preview } : {}),
         ...(result.content !== undefined ? { content: result.content } : {}),
       });
     })
@@ -6437,7 +6433,6 @@ export function createApp(deps: ServerDeps) {
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
-    .route('/', starCountRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)

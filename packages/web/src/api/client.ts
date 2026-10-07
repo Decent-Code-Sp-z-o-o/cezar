@@ -98,7 +98,6 @@ import type {
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
-  StarCountPayload,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -421,13 +420,6 @@ const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent
 /** Version, update check, repo/branch, and the tool probes behind the Tools menu. */
 export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
-}
-
-/** cezar's own GitHub star count, behind the sidebar's ⭐ ask. Workspace-level: the number is
- *  about cezar, never about the project on screen. `available: false` is the ordinary offline
- *  answer and the chip renders nothing for it. */
-export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
-  return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
@@ -1105,9 +1097,11 @@ export async function getRunFile(id: string, path: string, opts?: ReadOptions): 
   )
 }
 
-/** The same-origin URL an `<img>` can load an image file's bytes from (R5 Files tab). The
- *  server serves raw ONLY for image extensions within the size cap — everything else 409s.
- *  Scoped here rather than in send() — this URL is handed to an `<img>`, never fetched. */
+/** The same-origin URL a preview element (`<img>`, `<iframe>`, `<video>`, `<audio>`) can load a
+ *  file's bytes from (R5 Files tab). The server serves raw ONLY for the previewable types within
+ *  its raw cap (images, pdf, video, audio, html — PREVIEW_MIME in git-changes.ts); the file
+ *  entry's `preview` field is the client-visible verdict, everything else 409s. Scoped here
+ *  rather than in send() — this URL is handed to an element, never fetched. */
 export function runFileRawUrl(id: string, path: string): string {
   return apiPath(runPath(id, `/files?path=${encodeURIComponent(path)}&raw=1`))
 }

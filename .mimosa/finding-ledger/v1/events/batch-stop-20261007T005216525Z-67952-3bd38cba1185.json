@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20261007T005216525Z-67952-3bd38cba1185",
+  "runId": "20261007T005216525Z-67952-3bd38cba1185",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": [
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": false
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "a9e5994fc30627398d6c77d8fc0bdd2e7a7417e5",
+  "diffHash": "64fe7ad7cffa17fd813b1327d725225a3a6359023b01d3d61f38d4e4c45e016c",
+  "rulesVersion": "unavailable",
+  "sessionHash": "e6a42e85c808ccf79383845dc1276ec9426656792c68b1f0ca8c36e5a221640a",
+  "reportRef": ".mimosa/reports/task-review-sess_ef36f893-913b-4325-8b8c-78d8bf389ee8-20261007T005216525Z-67952-3bd38cba1185.json",
+  "events": [],
+  "observedFindingIds": [
+    "mimosa-34f2b41934ab54f9144d9faa",
+    "mimosa-dc185de71b30205818fee8df"
+  ],
+  "verifiedFiles": [
+    {
+      "file": "packages/web/src/routes/task-git/file-preview.tsx",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "packages/web/src/api/client.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "packages/web/src/routes/task-git/worktree-files.test.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "packages/web/src/routes/task-git/task-files.test.tsx",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "packages/cezar/src/server/git-changes.test.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "packages/cezar/src/server/server.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-10-07T00:52:16.825Z"
+}

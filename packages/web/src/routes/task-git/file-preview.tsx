@@ -1,4 +1,11 @@
-import { FileQuestionIcon, FileWarningIcon, FileXIcon, MousePointerClickIcon, TriangleAlertIcon } from 'lucide-react'
+import {
+  ExternalLinkIcon,
+  FileQuestionIcon,
+  FileWarningIcon,
+  FileXIcon,
+  MousePointerClickIcon,
+  TriangleAlertIcon,
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { ApiError, runFileRawUrl } from '@/api/client'
@@ -8,14 +15,18 @@ import { CenteredState } from '@/components/centered-state'
 import { highlight, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
 import { cn } from '@/lib/utils'
 
-import { formatFileSize, previewKind } from './worktree-files'
+import { Markdown } from '../task-thread/markdown'
+import { formatFileSize, previewKind, type PreviewKind } from './worktree-files'
 
 /**
  * The Files tab's preview pane (R5 Step 1.6). Every state is honest about WHY there is no
- * text: images render inline from the server's raw mode (image extensions only — the server
- * refuses everything else as bytes), size-capped files say "too large", binary non-images
- * say "binary", and a 409 comes back in the server's own words. Text goes through the ONE
- * Shiki singleton with `langForPath`, plaintext fallback included.
+ * text: the server-renderable kinds (images, pdf, video, audio, html) render inline from the
+ * server's raw mode — the server ships its verdict in the entry's `preview` field, so the
+ * client never re-derives the allowlist — markdown renders as formatted text with a
+ * `Rendered | Source` toggle (spec 2026-10-05-repo-file-browser Q8), size-capped files say
+ * "too large", binary non-previewables say "binary", and a 409 comes back in the server's own
+ * words. Text goes through the ONE Shiki singleton with `langForPath`, plaintext fallback
+ * included.
  */
 export function FilePreview({ runId, path, className }: { runId: string; path: string | null; className?: string }) {
   const entry = useRunFile(runId, path ?? undefined)
@@ -64,6 +75,9 @@ export function FilePreview({ runId, path, className }: { runId: string; path: s
   return <FileEntryView runId={runId} entry={entry.data} className={className} />
 }
 
+/** The kinds whose bytes the server serves raw — these previews load from the raw URL. */
+const RAW_URL_KINDS: ReadonlySet<PreviewKind> = new Set(['image', 'pdf', 'video', 'audio', 'html'])
+
 function FileEntryView({
   runId,
   entry,
@@ -74,6 +88,10 @@ function FileEntryView({
   className?: string
 }) {
   const kind = previewKind(entry)
+  const rawUrl = RAW_URL_KINDS.has(kind) ? runFileRawUrl(runId, entry.path) : undefined
+  // Markdown's Rendered | Source choice (spec 2026-10-05-repo-file-browser Q8) lives here, not
+  // inside the markdown body, so the pane header can host the toggle.
+  const [sourceView, setSourceView] = useState(false)
   return (
     <Pane className={className}>
       <header
@@ -81,7 +99,21 @@ function FileEntryView({
         className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs"
       >
         <span className="min-w-0 truncate font-mono font-medium">{entry.path}</span>
+        {kind === 'markdown' && <ViewToggle source={sourceView} onToggle={setSourceView} />}
         <span className="ml-auto shrink-0 tabular-nums text-soft-foreground">{formatFileSize(entry.size)}</span>
+        {rawUrl !== undefined && kind !== 'image' && (
+          <a
+            data-slot="file-preview-open-raw"
+            href={rawUrl}
+            target="_blank"
+            rel="noreferrer"
+            title="Open the raw file in a new tab"
+            aria-label="Open the raw file in a new tab"
+            className="shrink-0 text-soft-foreground transition-colors hover:text-foreground"
+          >
+            <ExternalLinkIcon className="size-3.5" aria-hidden="true" />
+          </a>
+        )}
       </header>
       {kind === 'image' ? (
         <div className="flex justify-center p-4">
@@ -93,6 +125,36 @@ function FileEntryView({
             className="max-h-[70vh] max-w-full rounded-sm"
           />
         </div>
+      ) : kind === 'markdown' ? (
+        sourceView ? (
+          <CodeLines path={entry.path} text={entry.content ?? ''} />
+        ) : (
+          <div data-slot="file-preview-markdown" className="max-h-[70vh] overflow-y-auto px-4 py-3">
+            <Markdown>{entry.content ?? ''}</Markdown>
+          </div>
+        )
+      ) : kind === 'pdf' ? (
+        // The browser's own PDF viewer. The raw response is application/pdf with nosniff and a
+        // sandbox CSP — served as a document the viewer owns, never sniffed as HTML.
+        <iframe src={rawUrl} title={entry.path} data-slot="file-preview-pdf" className="h-[70vh] w-full" />
+      ) : kind === 'video' ? (
+        <div className="flex justify-center p-4">
+          <video src={rawUrl} controls data-slot="file-preview-video" className="max-h-[70vh] w-full rounded-sm" />
+        </div>
+      ) : kind === 'audio' ? (
+        <div className="p-4">
+          <audio src={rawUrl} controls data-slot="file-preview-audio" className="w-full" />
+        </div>
+      ) : kind === 'html' ? (
+        // `sandbox=""` — no scripts, no forms, opaque origin — is the client-side half of the
+        // server's sandbox CSP: the preview stays a static document even if that header regressed.
+        <iframe
+          src={rawUrl}
+          title={entry.path}
+          sandbox=""
+          data-slot="file-preview-html"
+          className="h-[70vh] w-full bg-card"
+        />
       ) : kind === 'too-large' ? (
         <CenteredState
           icon={<FileWarningIcon />}
@@ -113,6 +175,31 @@ function FileEntryView({
         <CodeLines path={entry.path} text={entry.content ?? ''} />
       )}
     </Pane>
+  )
+}
+
+/** The markdown preview's `Rendered | Source` segmented toggle — the diff facade's ModeButton
+ *  grammar (diff-controls.tsx), kept in the same visual language. */
+function ViewToggle({ source, onToggle }: { source: boolean; onToggle: (source: boolean) => void }) {
+  const buttonClass = (active: boolean) =>
+    cn(
+      'rounded-[5px] px-2 py-0.5 text-[11px] font-medium',
+      active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
+    )
+  return (
+    <span
+      data-slot="file-preview-view-toggle"
+      role="group"
+      aria-label="Markdown view"
+      className="flex shrink-0 items-center rounded-md border border-border p-0.5"
+    >
+      <button type="button" data-view="rendered" aria-pressed={!source} className={buttonClass(!source)} onClick={() => onToggle(false)}>
+        Rendered
+      </button>
+      <button type="button" data-view="source" aria-pressed={source} className={buttonClass(source)} onClick={() => onToggle(true)}>
+        Source
+      </button>
+    </span>
   )
 }
 

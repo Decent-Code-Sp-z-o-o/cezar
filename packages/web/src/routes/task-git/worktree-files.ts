@@ -6,8 +6,9 @@ import type { WorktreeEntry } from '@open-mercato/cezar-api-client'
  * rules are unit-testable without rendering.
  */
 
-/** Extensions the preview renders as an inline `<img>` — must match the server's raw-serving
- *  allowlist (IMAGE_MIME in src/server/git-changes.ts), or the `<img>` would 409. */
+/** Extensions the tree's file rows decorate with the image icon. Cosmetic only — the preview
+ *  decision itself is the server's `preview` field, so this list drifting costs an icon, not
+ *  a wrong pane. */
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'])
 
 export function isImagePath(path: string): boolean {
@@ -17,17 +18,43 @@ export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
 }
 
-export type PreviewKind = 'image' | 'too-large' | 'binary' | 'text'
+/**
+ * Markdown renders as formatted text (spec 2026-10-05-repo-file-browser Q8) rather than through
+ * the Shiki code path. Presentation-only: markdown is text within the content cap, so its
+ * bytes need no raw serving and the server has no verdict to give.
+ */
+const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown'])
+
+export function isMarkdownPath(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return false
+  return MARKDOWN_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
+}
+
+export type PreviewKind =
+  | 'markdown'
+  | 'image'
+  | 'pdf'
+  | 'video'
+  | 'audio'
+  | 'html'
+  | 'too-large'
+  | 'binary'
+  | 'text'
 
 /**
- * What a file entry previews as. Order matters: an image past the size cap is "too large"
- * (the server refuses its raw bytes too), an image within it renders inline even though the
- * API flags it binary, and only non-image binaries land on the "binary file" state.
+ * What a file entry previews as, in order. The server's `preview` field is the verdict for
+ * everything whose bytes get served raw (images, pdf, video, audio, html — extension-allowlisted
+ * and within the raw cap, decided server-side), so it wins first: a 2 MB PNG is too large for
+ * the TEXT cap yet still renders inline from its raw URL. Markdown is client-side (its content
+ * is the text the entry already carries). Then the honest no-preview states, then text.
  */
 export function previewKind(entry: Extract<WorktreeEntry, { type: 'file' }>): PreviewKind {
+  if (entry.preview) return entry.preview
   if (entry.tooLarge) return 'too-large'
-  if (isImagePath(entry.path)) return 'image'
   if (entry.binary) return 'binary'
+  if (isMarkdownPath(entry.path)) return 'markdown'
   return 'text'
 }
 
