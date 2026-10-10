@@ -8,8 +8,8 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
-import { ApiError, runFileRawUrl } from '@/api/client'
-import { useRunFile } from '@/api/queries'
+import { ApiError, repoFileRawUrl, runFileRawUrl } from '@/api/client'
+import { useRepoFile, useRunFile } from '@/api/queries'
 import type { WorktreeEntry } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { highlight, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
@@ -19,17 +19,61 @@ import { Markdown } from '../task-thread/markdown'
 import { formatFileSize, previewKind, type PreviewKind } from './worktree-files'
 
 /**
- * The Files tab's preview pane (R5 Step 1.6). Every state is honest about WHY there is no
- * text: the server-renderable kinds (images, pdf, video, audio, html) render inline from the
- * server's raw mode — the server ships its verdict in the entry's `preview` field, so the
- * client never re-derives the allowlist — markdown renders as formatted text with a
- * `Rendered | Source` toggle (spec 2026-10-05-repo-file-browser Q8), size-capped files say
- * "too large", binary non-previewables say "binary", and a 409 comes back in the server's own
- * words. Text goes through the ONE Shiki singleton with `langForPath`, plaintext fallback
- * included.
+ * The preview pane behind BOTH file browsers (R5 Step 1.6; generalized for the repo Files sub-tab,
+ * #1279). Every state is honest about WHY there is no text: the server-renderable kinds (images,
+ * pdf, video, audio, html) render inline from the server's raw mode — the server ships its verdict
+ * in the entry's `preview` field, so the client never re-derives the allowlist — markdown renders
+ * as formatted text with a `Rendered | Source` toggle (spec 2026-10-05-repo-file-browser Q8),
+ * size-capped files say "too large", binary non-previewables say "binary", and a 409 comes back in
+ * the server's own words. Text goes through the ONE Shiki singleton with `langForPath`, plaintext
+ * fallback included.
+ *
+ * `source` is what made this reusable: a run's worktree and the project checkout answer the same
+ * `WorktreeEntry` shape from two different routes, so the only coupling was which hook to call.
  */
-export function FilePreview({ runId, path, className }: { runId: string; path: string | null; className?: string }) {
-  const entry = useRunFile(runId, path ?? undefined)
+export type FileSource = { kind: 'run'; runId: string } | { kind: 'repo' }
+
+/**
+ * One entry, from whichever route `source` names.
+ *
+ * BOTH hooks are called every render — the inactive one with an `undefined` path, which disables
+ * its query. Branching on `source` to call only one would be a conditional hook, and the cost of
+ * the disabled one is a cache read.
+ */
+function useFileEntry(source: FileSource, path: string | undefined) {
+  const run = useRunFile(
+    source.kind === 'run' ? source.runId : undefined,
+    source.kind === 'run' ? path : undefined,
+  )
+  const repo = useRepoFile(source.kind === 'repo' ? path : undefined)
+  return source.kind === 'run' ? run : repo
+}
+
+/** The raw-bytes URL for an image, per source. */
+function rawUrl(source: FileSource, path: string): string {
+  return source.kind === 'run' ? runFileRawUrl(source.runId, path) : repoFileRawUrl(path)
+}
+
+/** The kinds whose bytes the server serves raw — these previews load from the raw URL. */
+const RAW_URL_KINDS: ReadonlySet<PreviewKind> = new Set(['image', 'pdf', 'video', 'audio', 'html'])
+
+/**
+ * The Markdown view mode, remembered for the SESSION rather than per file: someone reading several
+ * specs in a row should not re-toggle at every one. Module-level on purpose — this is a transient
+ * view preference, not state a user authors, so it earns no storage key (AGENTS.md § Zero config).
+ */
+let markdownViewMode: 'rendered' | 'source' = 'rendered'
+
+export function FilePreview({
+  source,
+  path,
+  className,
+}: {
+  source: FileSource
+  path: string | null
+  className?: string
+}) {
+  const entry = useFileEntry(source, path ?? undefined)
 
   if (path === null) {
     return (
@@ -54,7 +98,8 @@ export function FilePreview({ runId, path, className }: { runId: string; path: s
     )
   }
   if (entry.isError) {
-    // A 409 is the server's answer ("symlinks are not served: …"), not an outage.
+    // A 409 is the server's answer ("symlinks are not served: …", "path is not in the repository
+    // index: …"), not an outage.
     const refused = entry.error instanceof ApiError && entry.error.status === 409
     return (
       <Pane className={className}>
@@ -72,39 +117,48 @@ export function FilePreview({ runId, path, className }: { runId: string; path: s
     // Directories are the tree's business; a stale selection that became a dir shows nothing.
     return null
   }
-  return <FileEntryView runId={runId} entry={entry.data} className={className} />
+  return <FileEntryView source={source} entry={entry.data} className={className} />
 }
 
-/** The kinds whose bytes the server serves raw — these previews load from the raw URL. */
-const RAW_URL_KINDS: ReadonlySet<PreviewKind> = new Set(['image', 'pdf', 'video', 'audio', 'html'])
-
 function FileEntryView({
-  runId,
+  source,
   entry,
   className,
 }: {
-  runId: string
+  source: FileSource
   entry: Extract<WorktreeEntry, { type: 'file' }>
   className?: string
 }) {
   const kind = previewKind(entry)
-  const rawUrl = RAW_URL_KINDS.has(kind) ? runFileRawUrl(runId, entry.path) : undefined
+  const markdown = kind === 'markdown'
+  // One raw URL per render for every server-renderable kind: the image inline it directly, the
+  // rest also earn the header's open-in-new-tab link (`kind !== 'image'` — the pane IS the image).
+  const rawHref = RAW_URL_KINDS.has(kind) ? rawUrl(source, entry.path) : undefined
   // Markdown's Rendered | Source choice (spec 2026-10-05-repo-file-browser Q8) lives here, not
   // inside the markdown body, so the pane header can host the toggle.
-  const [sourceView, setSourceView] = useState(false)
+  const [mode, setMode] = useState(markdownViewMode)
+  const pick = (next: 'rendered' | 'source') => {
+    markdownViewMode = next
+    setMode(next)
+  }
+
   return (
     <Pane className={className}>
+      {/* Sticky like the diff's file headers, so a long file never loses its name: it pins to the
+          top of the preview column while the lines scroll beneath it. Opaque for that reason (the
+          old `bg-muted/40` let lines show through), with the same 1px cover above it as the diff
+          header to close WebKit's sub-pixel seam at the column's top edge. */}
       <header
         data-slot="file-preview-head"
-        className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs"
+        className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))] px-4 py-2 text-xs shadow-[0_-1px_0_color-mix(in_oklab,var(--muted)_40%,var(--card))]"
       >
         <span className="min-w-0 truncate font-mono font-medium">{entry.path}</span>
-        {kind === 'markdown' && <ViewToggle source={sourceView} onToggle={setSourceView} />}
+        {markdown && <ViewToggle mode={mode} onModeChange={pick} />}
         <span className="ml-auto shrink-0 tabular-nums text-soft-foreground">{formatFileSize(entry.size)}</span>
-        {rawUrl !== undefined && kind !== 'image' && (
+        {rawHref !== undefined && kind !== 'image' && (
           <a
             data-slot="file-preview-open-raw"
-            href={rawUrl}
+            href={rawHref}
             target="_blank"
             rel="noreferrer"
             title="Open the raw file in a new tab"
@@ -120,36 +174,39 @@ function FileEntryView({
           {/* Raw bytes from the same origin the JSON came from — no auth story to get wrong. */}
           <img
             data-slot="file-preview-image"
-            src={runFileRawUrl(runId, entry.path)}
+            src={rawHref}
             alt={entry.path}
             className="max-h-[70vh] max-w-full rounded-sm"
           />
         </div>
       ) : kind === 'markdown' ? (
-        sourceView ? (
+        mode === 'source' ? (
           <CodeLines path={entry.path} text={entry.content ?? ''} />
         ) : (
-          <div data-slot="file-preview-markdown" className="max-h-[70vh] overflow-y-auto px-4 py-3">
+          // The thread's own Markdown component: the same single Shiki for fences and the same
+          // link-safety policy, which a repository README needs for exactly the same reason agent
+          // output does. A second Streamdown configuration here would be two renderers to keep honest.
+          <div data-slot="file-preview-markdown" className="px-4 py-3">
             <Markdown>{entry.content ?? ''}</Markdown>
           </div>
         )
       ) : kind === 'pdf' ? (
         // The browser's own PDF viewer. The raw response is application/pdf with nosniff and a
         // sandbox CSP — served as a document the viewer owns, never sniffed as HTML.
-        <iframe src={rawUrl} title={entry.path} data-slot="file-preview-pdf" className="h-[70vh] w-full" />
+        <iframe src={rawHref} title={entry.path} data-slot="file-preview-pdf" className="h-[70vh] w-full" />
       ) : kind === 'video' ? (
         <div className="flex justify-center p-4">
-          <video src={rawUrl} controls data-slot="file-preview-video" className="max-h-[70vh] w-full rounded-sm" />
+          <video src={rawHref} controls data-slot="file-preview-video" className="max-h-[70vh] w-full rounded-sm" />
         </div>
       ) : kind === 'audio' ? (
         <div className="p-4">
-          <audio src={rawUrl} controls data-slot="file-preview-audio" className="w-full" />
+          <audio src={rawHref} controls data-slot="file-preview-audio" className="w-full" />
         </div>
       ) : kind === 'html' ? (
         // `sandbox=""` — no scripts, no forms, opaque origin — is the client-side half of the
         // server's sandbox CSP: the preview stays a static document even if that header regressed.
         <iframe
-          src={rawUrl}
+          src={rawHref}
           title={entry.path}
           sandbox=""
           data-slot="file-preview-html"
@@ -180,7 +237,13 @@ function FileEntryView({
 
 /** The markdown preview's `Rendered | Source` segmented toggle — the diff facade's ModeButton
  *  grammar (diff-controls.tsx), kept in the same visual language. */
-function ViewToggle({ source, onToggle }: { source: boolean; onToggle: (source: boolean) => void }) {
+function ViewToggle({
+  mode,
+  onModeChange,
+}: {
+  mode: 'rendered' | 'source'
+  onModeChange: (mode: 'rendered' | 'source') => void
+}) {
   const buttonClass = (active: boolean) =>
     cn(
       'rounded-[5px] px-2 py-0.5 text-[11px] font-medium',
@@ -193,20 +256,34 @@ function ViewToggle({ source, onToggle }: { source: boolean; onToggle: (source: 
       aria-label="Markdown view"
       className="flex shrink-0 items-center rounded-md border border-border p-0.5"
     >
-      <button type="button" data-view="rendered" aria-pressed={!source} className={buttonClass(!source)} onClick={() => onToggle(false)}>
+      <button
+        type="button"
+        data-view="rendered"
+        aria-pressed={mode === 'rendered'}
+        className={buttonClass(mode === 'rendered')}
+        onClick={() => onModeChange('rendered')}
+      >
         Rendered
       </button>
-      <button type="button" data-view="source" aria-pressed={source} className={buttonClass(source)} onClick={() => onToggle(true)}>
+      <button
+        type="button"
+        data-view="source"
+        aria-pressed={mode === 'source'}
+        className={buttonClass(mode === 'source')}
+        onClick={() => onModeChange('source')}
+      >
         Source
       </button>
     </span>
   )
 }
 
-/** The preview card — same bordered grammar as the diff facade's file cards. */
+/** The preview card — same bordered grammar as the diff facade's file cards. `overflow-clip`, not
+ *  `overflow-hidden`: both round the corners, but `hidden` makes the card a scroll container of its
+ *  own, which would pin the sticky header to a card that never scrolls instead of to the column. */
 function Pane({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <section data-slot="file-preview" className={cn('overflow-hidden rounded-lg border border-border bg-card', className)}>
+    <section data-slot="file-preview" className={cn('overflow-clip rounded-lg border border-border bg-card', className)}>
       {children}
     </section>
   )

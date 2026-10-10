@@ -54,7 +54,12 @@ const RULES: Rule[] = [
     // (`&#8203;`) and longer hashes, and comment stripping removes issue refs like `#402`.
     pattern: /(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g,
     applies: styleSources,
-    allowed: (rel) => rel === 'src/styles/index.css',
+    allowed: (rel) =>
+      rel === 'src/styles/index.css' ||
+      // The terminal's xterm canvas cannot resolve CSS custom properties — ITheme wants
+      // concrete color strings — and the surface deliberately stays dark in both appearance
+      // modes (ANSI colors assume it), so its four constants live beside their only consumer.
+      rel === 'src/routes/terminal/terminal.tsx',
   },
   {
     name: 'no-amber-text',

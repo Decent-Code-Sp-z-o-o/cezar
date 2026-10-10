@@ -41,6 +41,7 @@ import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
+import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 
@@ -51,6 +52,7 @@ Usage:
   cezar run "<task>"        run a task headless in the terminal
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
+  cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -111,6 +113,11 @@ async function main(): Promise<void> {
   // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
   if (process.argv[2] === 'automation') {
     process.exitCode = await runAutomationCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
+  if (process.argv[2] === 'runs') {
+    process.exitCode = await runRunsCommand(process.argv.slice(3));
     return;
   }
   const { values, positionals } = parseArgs({
@@ -635,11 +642,21 @@ async function serverCommand(
 
   // Port: an explicit --port always wins; a brand-new named instance otherwise
   // auto-picks the next free loopback port so it can't collide with the first.
+  // ALLOCATE, then announce: the number printed here is the number that reaches
+  // `state.primaryPort`, the vhost's `proxy_pass` and the unit's `--port`.
+  // Announcing a default the allocation could still invalidate is what made the
+  // wizard say "loopback port 4321" while the service ran on 4322 (#913).
   let port = flags.port;
   if (mode === 'install' && instance !== DEFAULT_SERVER_INSTANCE && port === undefined) {
     const known = listServerInstances().some((i) => i.instance === instance);
     if (!known) {
-      port = nextFreeInstancePort();
+      try {
+        port = await nextFreeInstancePort();
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+        return;
+      }
       console.log(`\n  New instance "${instance}" (${domain}) → loopback port ${port} (override with --port).`);
     }
   }
