@@ -135,6 +135,7 @@ describe('AppShell', () => {
       'Git',
       'GitHub',
       'Automations',
+      'Terminal',
       'Skills',
       'Workflows',
       'Settings',
@@ -146,6 +147,7 @@ describe('AppShell', () => {
       '/git',
       '/github',
       '/automations',
+      '/terminal',
       '/skills',
       '/workflows',
       '/settings',
@@ -864,7 +866,7 @@ describe('AppShell', () => {
 
       // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
       // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      const visible = visibleNavItems({ forge: true, inbox: true, automations: true })
+      const visible = visibleNavItems({ forge: true, inbox: true, automations: true, terminal: true })
       expect(links.map((a) => a.getAttribute('href'))).toEqual(visible.map((item) => item.to))
       expect(links.map((a) => a.textContent)).toEqual(visible.map((item) => item.label))
 

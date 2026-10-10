@@ -25,3 +25,4 @@ export * from './dashboard-insights.ts';
 export * from './host.ts';
 export * from './tracker.ts';
 export * from './self-update.ts';
+export * from './terminal.ts';

@@ -53,6 +53,9 @@
     "yaml": "^2.5.0",
     "zod": "^4.4.3"
   },
+  "optionalDependencies": {
+    "node-pty": "1.0.0"
+  },
   "devDependencies": {
     "@open-mercato/cezar-api-client": "^0.14.0",
     "@open-mercato/cezar-contract": "^0.14.0",

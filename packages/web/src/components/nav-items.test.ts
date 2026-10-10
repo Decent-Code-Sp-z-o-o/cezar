@@ -73,6 +73,7 @@ describe('NAV_ITEMS', () => {
       'GitHub',
       'Tracker',
       'Automations',
+      'Terminal',
       'Skills',
       'Workflows',
       'Settings',
@@ -98,8 +99,8 @@ describe('visibleNavItems', () => {
     visibleNavItems(opts).map((item) => item.label)
 
   it('with everything available, the full nav renders', () => {
-    expect(labelsOf({ forge: true, inbox: true, automations: true, tracker: 'jira' })).toEqual([
-      'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Automations', 'Skills', 'Workflows', 'Settings',
+    expect(labelsOf({ forge: true, inbox: true, automations: true, terminal: true, tracker: 'jira' })).toEqual([
+      'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Automations', 'Terminal', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
@@ -145,6 +146,13 @@ describe('visibleNavItems', () => {
     ])
   })
 
+  // The web terminal is opt-in (spec 2026-10-10-terminal-tab, `CEZ_TERMINAL=1`): the item
+  // exists exactly while health reports the capability, like the Inbox and Automations gates.
+  it('shows the Terminal item exactly while the capability is on', () => {
+    expect(labelsOf({ forge: true, inbox: true, automations: true, terminal: true })).toContain('Terminal')
+    expect(labelsOf({ forge: true, inbox: true, automations: true })).not.toContain('Terminal')
+  })
+
   // The two gates on that one item are ANDed: a forge alone does not resurrect it, which is the
   // whole point of #801 — every project with a GitHub remote used to see the tab.
   it('a forge alone does not bring Automations back', () => {
@@ -152,7 +160,7 @@ describe('visibleNavItems', () => {
   })
 
   it('drops all three when nothing is available', () => {
-    expect(labelsOf({ forge: false, inbox: false, automations: false })).toEqual([
+    expect(labelsOf({ forge: false, inbox: false, automations: false, terminal: false })).toEqual([
       'Tasks',
       'Git',
       'Skills',
@@ -162,15 +170,17 @@ describe('visibleNavItems', () => {
   })
 
   it('defaults to absent — the nav claims nothing before health answers', () => {
-    expect(labelsOf()).toEqual(labelsOf({ forge: false, inbox: false, automations: false }))
+    expect(labelsOf()).toEqual(labelsOf({ forge: false, inbox: false, automations: false, terminal: false }))
   })
 
   it('never invents an item — the result is always a subset of NAV_ITEMS, in order', () => {
     for (const forge of [true, false]) {
       for (const inbox of [true, false]) {
         for (const automations of [true, false]) {
-          const items = visibleNavItems({ forge, inbox, automations })
-          expect(NAV_ITEMS.filter((i) => items.includes(i))).toEqual(items)
+          for (const terminal of [true, false]) {
+            const items = visibleNavItems({ forge, inbox, automations, terminal })
+            expect(NAV_ITEMS.filter((i) => items.includes(i))).toEqual(items)
+          }
         }
       }
     }

@@ -1,0 +1,391 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import WebSocket from 'ws';
+import { createSocketHub, type SocketHub, type TopicPublisher, type WsUpgradeVerdict } from './ws.ts';
+import { createTerminalHub, terminalEnabled, type PtyFactory, type TerminalHub } from './terminal.ts';
+
+/**
+ * The terminal hub is exercised over REAL sockets — a Node http server plus the
+ * `ws` client — because the contract under test is transport behavior: the
+ * single-use token, the pre-handshake rejections, and that a session lives and
+ * dies with its socket. The PTY is a fake: these tests must not spawn shells.
+ */
+
+const servers: Server[] = [];
+const hubs: TerminalHub[] = [];
+const socketHubs: SocketHub[] = [];
+
+beforeEach(() => {
+  process.env.CEZ_TERMINAL = '1';
+  delete process.env.CEZ_DRY_RUN;
+});
+
+afterEach(async () => {
+  delete process.env.CEZ_TERMINAL;
+  for (const hub of hubs.splice(0)) hub.close();
+  for (const hub of socketHubs.splice(0)) hub.close();
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }),
+    ),
+  );
+});
+
+interface FakePty {
+  cwd: string;
+  cols: number;
+  rows: number;
+  written: string[];
+  resized: Array<[number, number]>;
+  killed: boolean;
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(): void;
+  onData(listener: (data: string) => void): void;
+  onExit(listener: (info: { exitCode: number; signal?: number | string }) => void): void;
+  emit(data: string): void;
+  exit(info: { exitCode: number; signal?: number | string }): void;
+}
+
+/** A controllable PTY factory: records spawns, lets tests drive both directions. */
+function makePtyFactory() {
+  const created: FakePty[] = [];
+  const factory: PtyFactory = ({ cwd, cols, rows }) => {
+    let dataListener: ((data: string) => void) | undefined;
+    let exitListener: ((info: { exitCode: number; signal?: number | string }) => void) | undefined;
+    const pty: FakePty = {
+      cwd,
+      cols,
+      rows,
+      written: [],
+      resized: [],
+      killed: false,
+      write(data) {
+        pty.written.push(data);
+      },
+      resize(c, r) {
+        pty.resized.push([c, r]);
+      },
+      kill() {
+        pty.killed = true;
+      },
+      onData(listener) {
+        dataListener = listener;
+      },
+      onExit(listener) {
+        exitListener = listener;
+      },
+      emit(data) {
+        dataListener?.(data);
+      },
+      exit(info) {
+        exitListener?.(info);
+      },
+    };
+    created.push(pty);
+    return pty;
+  };
+  return { created, factory };
+}
+
+const allowAll = (): WsUpgradeVerdict => ({ trusted: true });
+
+async function boot(hub: TerminalHub): Promise<string> {
+  const server = createServer((_req, res) => {
+    res.statusCode = 404;
+    res.end();
+  });
+  // Direct wiring — the production path routes through the bus's delegate,
+  // which has its own coexistence test below. A `false` return means "not a
+  // terminal path": production destroys the socket at the call site, so the
+  // helper does the same.
+  server.on('upgrade', (req, socket, head) => {
+    if (!hub.handleUpgrade(req, socket, head)) socket.destroy();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  servers.push(server);
+  const { port } = server.address() as AddressInfo;
+  return `ws://127.0.0.1:${port}`;
+}
+
+/** A connected terminal client whose frames arrive as an awaitable queue. */
+async function connect(url: string): Promise<{
+  ws: WebSocket;
+  send: (frame: unknown) => void;
+  next: () => Promise<unknown>;
+}> {
+  const ws = new WebSocket(url);
+  const frames: unknown[] = [];
+  const waiters: Array<(frame: unknown) => void> = [];
+  ws.on('message', (raw) => {
+    const frame: unknown = JSON.parse(String(raw));
+    const waiter = waiters.shift();
+    if (waiter) waiter(frame);
+    else frames.push(frame);
+  });
+  await new Promise<void>((resolve, reject) => {
+    ws.on('open', resolve);
+    ws.on('error', reject);
+  });
+  return {
+    ws,
+    send: (frame) => ws.send(JSON.stringify(frame)),
+    next: () =>
+      frames.length > 0
+        ? Promise.resolve(frames.shift())
+        : new Promise((resolve, reject) => {
+            waiters.push(resolve);
+            setTimeout(() => reject(new Error('no frame within 2s')), 2_000).unref();
+          }),
+  };
+}
+
+/** The outcome of an upgrade attempt: `open` (accepted), a numeric HTTP status
+ *  line, or `destroyed` (the socket died with no response — how an unclaimed
+ *  path is dismissed). */
+async function handshakeOutcome(url: string): Promise<'open' | number | 'destroyed'> {
+  try {
+    await connect(url);
+    return 'open';
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const code = message.match(/(\d{3})/)?.[1];
+    return code ? Number(code) : 'destroyed';
+  }
+}
+
+const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('terminalEnabled', () => {
+  it.each([
+    [{ CEZ_TERMINAL: '1' } as NodeJS.ProcessEnv, true],
+    [{ CEZ_TERMINAL: '1', CEZ_DRY_RUN: '1' } as NodeJS.ProcessEnv, false],
+    [{ CEZ_TERMINAL: 'true' } as NodeJS.ProcessEnv, false],
+    [{} as NodeJS.ProcessEnv, false],
+  ])('reads %j as %s', (env, expected) => {
+    expect(terminalEnabled(env)).toBe(expected);
+  });
+});
+
+describe('TerminalHub.issue', () => {
+  it('mints a scoped wsPath and honors the requested dims', () => {
+    const { factory } = makePtyFactory();
+    const hub = createTerminalHub({ ptyFactory: factory });
+    hubs.push(hub);
+    const issued = hub.issue({ projectId: 'my repo', root: '/repo', cols: 120, rows: 40 });
+    expect(issued).toMatchObject({
+      status: 200,
+      body: { wsPath: `/api/v1/p/${encodeURIComponent('my repo')}/terminal/ws` },
+    });
+  });
+
+  it('refuses with 409 when the flag is off', () => {
+    delete process.env.CEZ_TERMINAL;
+    const { factory } = makePtyFactory();
+    const hub = createTerminalHub({ ptyFactory: factory });
+    hubs.push(hub);
+    expect(hub.issue({ projectId: 'p', root: '/r' })).toMatchObject({ status: 409 });
+  });
+
+  it('refuses with 409 under CEZ_DRY_RUN=1 even when opted in', () => {
+    process.env.CEZ_DRY_RUN = '1';
+    const { factory } = makePtyFactory();
+    const hub = createTerminalHub({ ptyFactory: factory });
+    hubs.push(hub);
+    expect(hub.issue({ projectId: 'p', root: '/r' })).toMatchObject({ status: 409 });
+  });
+
+  it('refuses with 409 at the live-session cap', async () => {
+    const { factory } = makePtyFactory();
+    const hub = createTerminalHub({ ptyFactory: factory, verifyUpgrade: allowAll, maxSessions: 1 });
+    hubs.push(hub);
+    const issued = hub.issue({ projectId: 'p', root: '/r' });
+    if (issued.status !== 200) throw new Error('issue failed');
+    const base = await boot(hub);
+    const first = await connect(`${base}${issued.body.wsPath}?token=${issued.body.token}`);
+    await settle(30); // let the server-side session register before counting slots
+    expect(hub.issue({ projectId: 'p', root: '/r' })).toMatchObject({ status: 409 });
+    first.ws.close();
+  });
+});
+
+describe('TerminalHub.handleUpgrade', () => {
+  async function bootWithFactory(
+    verify: (req: Parameters<TerminalHub['handleUpgrade']>[0]) => WsUpgradeVerdict = allowAll,
+    hubOptions = {},
+  ) {
+    const { created, factory } = makePtyFactory();
+    const hub = createTerminalHub({ ptyFactory: factory, verifyUpgrade: verify, ...hubOptions });
+    hubs.push(hub);
+    const base = await boot(hub);
+    const issued = hub.issue({ projectId: 'proj', root: '/repo', cols: 100, rows: 30 });
+    if (issued.status !== 200) throw new Error('issue failed');
+    // The one PTY these tests drive, with a typed "was it spawned?" guard.
+    const spawned = (): FakePty => {
+      const pty = created[0];
+      if (!pty) throw new Error('no PTY was spawned');
+      return pty;
+    };
+    return { hub, created, spawned, base, token: issued.body.token, wsPath: issued.body.wsPath };
+  }
+
+  it('spawns a PTY in the project root at the requested dims and pipes both directions', async () => {
+    const { created, spawned, base, token, wsPath } = await bootWithFactory();
+    const client = await connect(`${base}${wsPath}?token=${token}`);
+    expect(created).toHaveLength(1);
+    expect(spawned()).toMatchObject({ cwd: '/repo', cols: 100, rows: 30 });
+    // The hub always applies the spawn dims through resize once connected.
+    expect(spawned().resized).toEqual([[100, 30]]);
+
+    spawned().emit('hello\n');
+    await expect(client.next()).resolves.toEqual({ type: 'data', data: 'hello\n' });
+
+    client.send({ type: 'input', data: 'ls -la' });
+    await settle(10);
+    expect(spawned().written).toContain('ls -la');
+
+    client.send({ type: 'resize', cols: 120, rows: 40 });
+    await settle(10);
+    expect(spawned().resized).toEqual([[100, 30], [120, 40]]);
+    client.ws.close();
+  });
+
+  it('keeps the session through a malformed frame, answering an error frame instead', async () => {
+    const { spawned, base, token, wsPath } = await bootWithFactory();
+    const client = await connect(`${base}${wsPath}?token=${token}`);
+    client.ws.send('not json');
+    await expect(client.next()).resolves.toMatchObject({ type: 'error' });
+    client.send({ type: 'input', data: 'still alive' });
+    await settle(10);
+    expect(spawned().written).toContain('still alive');
+    client.ws.close();
+  });
+
+  it('kills the PTY when the socket dies', async () => {
+    const { created, spawned, base, token, wsPath } = await bootWithFactory();
+    const client = await connect(`${base}${wsPath}?token=${token}`);
+    client.ws.close();
+    await settle(20);
+    expect(spawned().killed).toBe(true);
+  });
+
+  it('announces the exit code and closes when the PTY exits', async () => {
+    const { spawned, base, token, wsPath } = await bootWithFactory();
+    const client = await connect(`${base}${wsPath}?token=${token}`);
+    spawned().exit({ exitCode: 3 });
+    await expect(client.next()).resolves.toEqual({ type: 'exit', exitCode: 3 });
+    await settle(20);
+    expect(spawned().killed).toBe(true);
+  });
+
+  it('consumes a token exactly once', async () => {
+    const { base, token, wsPath } = await bootWithFactory();
+    const first = await connect(`${base}${wsPath}?token=${token}`);
+    first.ws.close();
+    await settle(10);
+    expect(await handshakeOutcome(`${base}${wsPath}?token=${token}`)).toBe(403);
+  });
+
+  it('refuses a missing or expired token with 403', async () => {
+    const { base, wsPath } = await bootWithFactory();
+    expect(await handshakeOutcome(`${base}${wsPath}`)).toBe(403);
+    expect(await handshakeOutcome(`${base}${wsPath}?token=nope`)).toBe(403);
+  });
+
+  it('expires tokens after the TTL', async () => {
+    const { base, token, wsPath } = await bootWithFactory(allowAll, { tokenTtlMs: 5 });
+    await settle(20);
+    expect(await handshakeOutcome(`${base}${wsPath}?token=${token}`)).toBe(403);
+  });
+
+  it('applies the origin verdict before consuming the token', async () => {
+    const { factory } = makePtyFactory();
+    let admit = false;
+    const hub = createTerminalHub({
+      ptyFactory: factory,
+      verifyUpgrade: () => (admit ? { trusted: true } : false),
+    });
+    hubs.push(hub);
+    const base = await boot(hub);
+    const issued = hub.issue({ projectId: 'proj', root: '/repo' });
+    if (issued.status !== 200) throw new Error('issue failed');
+    expect(await handshakeOutcome(`${base}${issued.body.wsPath}?token=${issued.body.token}`)).toBe(403);
+    // The token was NOT consumed by the refused attempt — the same mint still
+    // connects once the origin verdict passes.
+    admit = true;
+    const client = await connect(`${base}${issued.body.wsPath}?token=${issued.body.token}`);
+    expect(client.ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('refuses upgrades while the flag is off, even with a fresh token', async () => {
+    const { base, token, wsPath } = await bootWithFactory();
+    delete process.env.CEZ_TERMINAL;
+    expect(await handshakeOutcome(`${base}${wsPath}?token=${token}`)).toBe(403);
+  });
+
+  it('answers 409 at the live-session cap instead of spawning another PTY', async () => {
+    const { created, factory } = makePtyFactory();
+    const hub = createTerminalHub({ ptyFactory: factory, verifyUpgrade: allowAll, maxSessions: 1 });
+    hubs.push(hub);
+    const base = await boot(hub);
+    // Mint BOTH tokens while the cap is still open...
+    const first = hub.issue({ projectId: 'proj', root: '/repo' });
+    const second = hub.issue({ projectId: 'proj', root: '/repo' });
+    if (first.status !== 200 || second.status !== 200) throw new Error('issue failed');
+    await connect(`${base}${first.body.wsPath}?token=${first.body.token}`);
+    // ...then the cap bites at upgrade time, where the slots are counted.
+    expect(await handshakeOutcome(`${base}${second.body.wsPath}?token=${second.body.token}`)).toBe(409);
+    expect(created).toHaveLength(1);
+  });
+
+  it('returns false for a path that is not a terminal path', async () => {
+    const { base, token } = await bootWithFactory();
+    expect(await handshakeOutcome(`${base}/api/v1/somewhere-else?token=${token}`)).toBe('destroyed');
+  });
+});
+
+describe('bus + terminal coexistence (one upgrade listener)', () => {
+  it('routes /api/v1/ws to the bus, the terminal path to the hub, destroys the rest', async () => {
+    const { created, factory } = makePtyFactory();
+    const terminal = createTerminalHub({ ptyFactory: factory, verifyUpgrade: allowAll });
+    hubs.push(terminal);
+    const bus = createSocketHub();
+    socketHubs.push(bus);
+    const publisher: TopicPublisher = {
+      snapshot: async () => ({ tick: 0 }),
+      start: (publish) => {
+        publish({ tick: 1 });
+        return () => undefined;
+      },
+    };
+    const server = createServer((_req, res) => {
+      res.statusCode = 404;
+      res.end();
+    });
+    bus.registerTopic('ticker', publisher);
+    bus.attach(server, allowAll, (req, socket, head) => terminal.handleUpgrade(req, socket, head));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const { port } = server.address() as AddressInfo;
+    const base = `ws://127.0.0.1:${port}`;
+
+    // The bus answers its own path (unknown-topic error frame proves the hub spoke).
+    const busClient = await connect(`${base}/api/v1/ws`);
+    busClient.send({ type: 'subscribe', topic: 'nope' });
+    await expect(busClient.next()).resolves.toMatchObject({ type: 'error', topic: 'nope' });
+
+    // The delegate answers the terminal path.
+    const issued = terminal.issue({ projectId: 'proj', root: '/repo' });
+    if (issued.status !== 200) throw new Error('issue failed');
+    const terminalClient = await connect(`${base}${issued.body.wsPath}?token=${issued.body.token}`);
+    expect(created).toHaveLength(1);
+    terminalClient.ws.close();
+
+    // An unclaimed foreign path is destroyed, exactly as without a delegate.
+    expect(await handshakeOutcome(`${base}/api/v1/elsewhere`)).toBe('destroyed');
+  });
+});

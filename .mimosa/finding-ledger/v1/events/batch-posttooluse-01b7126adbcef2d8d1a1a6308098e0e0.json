@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "posttooluse-01b7126adbcef2d8d1a1a6308098e0e0",
+  "runId": null,
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "PostToolUse"
+  },
+  "revision": null,
+  "diffHash": null,
+  "rulesVersion": null,
+  "sessionHash": "ab9297ca3554a1cb5f2f4d0a2d6480e1d45b8a1a8f37d1ec7ccdf5effbf97817",
+  "reportRef": null,
+  "events": [
+    {
+      "eventId": "hook-fea374f370c12a27f876f995d1ea5bc4",
+      "findingId": "mimosa-9e5616af59c01e9b7e6c9061",
+      "type": "static_fix_verified",
+      "at": "2026-10-10T17:25:58.532Z",
+      "identity": {
+        "projectRelativeFile": "packages/cezar/src/server/terminal.test.ts",
+        "ruleId": "security",
+        "codeEvidenceHash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 10,
+      "endLine": 10,
+      "reasonCode": "static_rescan_passed",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "evidenceHash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809"
+      },
+      "sequence": 0
+    }
+  ],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-10-10T17:25:58.932Z"
+}

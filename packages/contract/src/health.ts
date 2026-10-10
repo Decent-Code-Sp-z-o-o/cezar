@@ -56,6 +56,12 @@ export const capabilitiesSchema = z.object({
    */
   dispatch: z.boolean(),
   /**
+   * `true` means the web Terminal tab exists (spec `.ai/specs/2026-10-10-terminal-tab.md`) —
+   * opt-in via `CEZ_TERMINAL=1`, off by default, and force-off under `CEZ_DRY_RUN=1`. Off, the
+   * nav item is absent and the `/terminal/session` route answers `409`.
+   */
+  terminal: z.boolean(),
+  /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation
    * only.

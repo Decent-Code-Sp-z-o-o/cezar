@@ -1,0 +1,956 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20261010T182627764Z-29780-48d86d607488",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "candidate-select",
+      "target": "packages/web/src/routes.tsx",
+      "reason": "candidate_limit_exceeded: 21 changed reviewable file(s) were not scanned because the limit is 20"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/contract/src/terminal.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/contract/src/index.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/contract/src/health.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/capabilities.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/terminal.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/ws.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/server.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/terminal.test.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/terminal-api.test.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/contract-parity.terminal.test.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/typed-bodies.test.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/cezar/src/server/capabilities.test.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/web/src/api/client.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/web/src/routes/terminal/terminal.tsx",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/web/src/components/nav-items.ts",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/web/src/components/app-shell-container.tsx",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/web/src/components/app-shell.tsx",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "packages/web/src/components/command-palette.tsx",
+      "reason": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT"
+    },
+    {
+      "stage": "supply-chain-check",
+      "target": ".",
+      "reason": "stop_budget_exhausted: focused supply-chain check was not run before the gate budget"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": true,
+      "captured_files": 1163,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 41
+    },
+    "change_tracking": {
+      "touched_observed": 26,
+      "touched_retained": 26,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 41,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 41,
+      "selected_files": 20,
+      "limit": 20,
+      "truncated": true
+    },
+    "scanning": {
+      "required_files": 18,
+      "scanned_files": 0,
+      "skipped_files": 0,
+      "failed_files": 18,
+      "project_checks_required": 1,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "candidate_limit_exceeded": 1,
+      "scanner_failed": 18,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 20
+    },
+    "reasons": [
+      {
+        "code": "candidate_limit_exceeded",
+        "stage": "candidate-select",
+        "target": "packages/web/src/routes.tsx",
+        "detail": "21 changed reviewable file(s) were not scanned because the limit is 20",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/contract/src/terminal.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/contract/src/index.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/contract/src/health.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/capabilities.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/terminal.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/ws.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/server.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/terminal.test.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/terminal-api.test.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/contract-parity.terminal.test.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/typed-bodies.test.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/capabilities.test.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/web/src/api/client.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/web/src/routes/terminal/terminal.tsx",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/nav-items.ts",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/app-shell-container.tsx",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/app-shell.tsx",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/command-palette.tsx",
+        "detail": "spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "stop_budget_exhausted",
+        "stage": "supply-chain-check",
+        "target": ".",
+        "detail": "focused supply-chain check was not run before the gate budget",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "candidate-select",
+        "target": "packages/web/src/routes.tsx",
+        "detail": "candidate_limit_exceeded: 21 changed reviewable file(s) were not scanned because the limit is 20",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/contract/src/terminal.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/contract/src/index.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/contract/src/health.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/capabilities.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/terminal.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/ws.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/server.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/terminal.test.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/terminal-api.test.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/contract-parity.terminal.test.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/typed-bodies.test.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/cezar/src/server/capabilities.test.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/web/src/api/client.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/web/src/routes/terminal/terminal.tsx",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/nav-items.ts",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/app-shell-container.tsx",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/app-shell.tsx",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "packages/web/src/components/command-palette.tsx",
+        "detail": "scanner_failed: spawnSync /opt/homebrew/Cellar/node@20/20.20.2/bin/node ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "supply-chain-check",
+        "target": ".",
+        "detail": "stop_budget_exhausted: focused supply-chain check was not run before the gate budget",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-10-10T18:26:27.764Z",
+  "session_id": "sess_65f51cd4-72dd-4b9a-a718-6cf5cdf9dcc7",
+  "target": ".",
+  "revision": "fa191df12144a44c462003777f3f291e487517f3",
+  "rules_version": "unavailable",
+  "diff_hash": "c0d6c44300e94f5267d52e729ecfe014552d28e7bf424efd9f9c649f4b35a630",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 20,
+    "changed_files": [
+      {
+        "file": "packages/cezar/package.json",
+        "ranges": [
+          {
+            "start": 56,
+            "end": 58
+          }
+        ],
+        "before_hash": "772b632e7833818f0f29b8663e39732b6acffad33ee728901d5443624bf9548c",
+        "after_hash": "a766a0fee4aafc09fdaa99ab3044a23f81fbaecbda18f1561db61ae298845730"
+      },
+      {
+        "file": "packages/cezar/src/server/capabilities.test.ts",
+        "ranges": [
+          {
+            "start": 164,
+            "end": 164
+          },
+          {
+            "start": 254,
+            "end": 274
+          }
+        ],
+        "before_hash": "78ff1191da7fee7b17697445745c491ceb59d149b47484e9985afdc78410014f",
+        "after_hash": "e79bf65714ee643885aee7c22baf4c5e82fe809ef687300631530295c6d9a2b2"
+      },
+      {
+        "file": "packages/cezar/src/server/capabilities.ts",
+        "ranges": [
+          {
+            "start": 52,
+            "end": 52
+          },
+          {
+            "start": 172,
+            "end": 177
+          }
+        ],
+        "before_hash": "914c1fc9204de25607307161f4d600a579b7e53111b978eb175652b2721ab601",
+        "after_hash": "ffbc9566e39d84e92a6445f7ae942465fd9563dea5024095438221bab48a79d4"
+      },
+      {
+        "file": "packages/cezar/src/server/contract-parity.terminal.test.ts",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 33
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "2fd28981c02c24b70ccbf1731b1db29a9d238ce0ac5653c5c27c6ea290f605a0"
+      },
+      {
+        "file": "packages/cezar/src/server/server.ts",
+        "ranges": [
+          {
+            "start": 62,
+            "end": 62
+          },
+          {
+            "start": 209,
+            "end": 209
+          },
+          {
+            "start": 320,
+            "end": 325
+          },
+          {
+            "start": 3354,
+            "end": 3377
+          },
+          {
+            "start": 6263,
+            "end": 6264
+          },
+          {
+            "start": 6511,
+            "end": 6515
+          },
+          {
+            "start": 6546,
+            "end": 6546
+          },
+          {
+            "start": 6657,
+            "end": 6665
+          }
+        ],
+        "before_hash": "3b14dd852b90af0eb7e42e15545a9d07e2b1388ef17eeecd7c48435c3376e590",
+        "after_hash": "907a5443160f7b3c9c65dcca261760eee0cb3ede820179ca218229dd15c0631b"
+      },
+      {
+        "file": "packages/cezar/src/server/terminal-api.test.ts",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 94
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "9c4505f7cad808e21e4c73fb111cafc7a26867d67ccc3633d914cb83bd6a59de"
+      },
+      {
+        "file": "packages/cezar/src/server/terminal.test.ts",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 391
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "4470c8dd524aa536c9f1a426222f834c5cbf7c65785f0c3bbd33fa0c10913835"
+      },
+      {
+        "file": "packages/cezar/src/server/terminal.ts",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 402
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "358b253af031a232c5092820916fe70a07ac80ff38f39fd6c84770ebfc6fd3b0"
+      },
+      {
+        "file": "packages/cezar/src/server/typed-bodies.test.ts",
+        "ranges": [
+          {
+            "start": 63,
+            "end": 63
+          }
+        ],
+        "before_hash": "cd3abc546c742c418964dc2437e88378c189e0aa391ba174eb5e0769c95b68f1",
+        "after_hash": "75cb69868020f1b53151a19ab1dac4d955e4de79c15d35e83c7c1adbcfe0943c"
+      },
+      {
+        "file": "packages/cezar/src/server/ws.ts",
+        "ranges": [
+          {
+            "start": 99,
+            "end": 111
+          },
+          {
+            "start": 117,
+            "end": 119
+          },
+          {
+            "start": 259,
+            "end": 259
+          },
+          {
+            "start": 270,
+            "end": 274
+          }
+        ],
+        "before_hash": "14e1da213c8822a75e1a954b84a11b32d4d9eecbb7792b16fae4d4609f5d7b82",
+        "after_hash": "8d6090173038e3d2426e6527ced030eda0360e8cd5535a586e6c1867db697440"
+      },
+      {
+        "file": "packages/contract/src/health.ts",
+        "ranges": [
+          {
+            "start": 58,
+            "end": 63
+          }
+        ],
+        "before_hash": "1f26f29f2130e2aade1d9f5deeb0d77f342c9b86cb7e22a774e440d52ad784ca",
+        "after_hash": "486d8d318145afaa3f927480d0cee346592c102b0bf6c1bc56009b25dee35a14"
+      },
+      {
+        "file": "packages/contract/src/index.ts",
+        "ranges": [
+          {
+            "start": 28,
+            "end": 28
+          }
+        ],
+        "before_hash": "b7f5b2626b4ed5ab96532732a820804645308c217e0bd617dd936c1dfd80f3e0",
+        "after_hash": "3725daec062991d1f0f29bb61c60b25438beeecb359e4458829e6e651dc097c5"
+      },
+      {
+        "file": "packages/contract/src/terminal.ts",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 26
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "a41737d78c8b178d1a9940d7f48f78286b3db18503e908426cc57412a50c1bc5"
+      },
+      {
+        "file": "packages/web/package.json",
+        "ranges": [
+          {
+            "start": 21,
+            "end": 22
+          }
+        ],
+        "before_hash": "b3d04b5ee5ebee519c06a37dbfe27bd4b6ad18860ea94507cdbf0cb313b3c44c",
+        "after_hash": "2737828536197ef44e1c0ea5229c407c4ec7ab507d6aaa0b3a38dc2d9167a402"
+      },
+      {
+        "file": "packages/web/src/api/client.ts",
+        "ranges": [
+          {
+            "start": 130,
+            "end": 130
+          },
+          {
+            "start": 2360,
+            "end": 2374
+          }
+        ],
+        "before_hash": "8910762c40be32e694bab95ab6a69d5c56ab6ee566badb3d47145300d08add01",
+        "after_hash": "b232ac950e6622e75638d6167b2c6530ea73adb9f688b4201b2bac72d43ebf84"
+      },
+      {
+        "file": "packages/web/src/components/app-shell-container.tsx",
+        "ranges": [
+          {
+            "start": 67,
+            "end": 68
+          },
+          {
+            "start": 142,
+            "end": 142
+          },
+          {
+            "start": 151,
+            "end": 151
+          },
+          {
+            "start": 183,
+            "end": 184
+          }
+        ],
+        "before_hash": "02404ca677f706bbc729dadcb25eb78abb3bb820d0c1acd89d0c47960673c0c7",
+        "after_hash": "6bc728e950ecc7065f403e1fd1384b25b97d1a3e3258d994bd06fabd85e29608"
+      },
+      {
+        "file": "packages/web/src/components/app-shell.tsx",
+        "ranges": [
+          {
+            "start": 96,
+            "end": 96
+          },
+          {
+            "start": 184,
+            "end": 184
+          },
+          {
+            "start": 248,
+            "end": 249
+          }
+        ],
+        "before_hash": "8369a0c474eb0dfbbea8c2f2da5946b5d1c62016bca15d624ac34c99aec50855",
+        "after_hash": "05d7a8d67e52c7c01c6ebeebcb1e4a8f8bf17b9c3b2335ef0eb5ff8dfdeddd37"
+      },
+      {
+        "file": "packages/web/src/components/command-palette.tsx",
+        "ranges": [
+          {
+            "start": 459,
+            "end": 459
+          }
+        ],
+        "before_hash": "0202c3065afed37872a37834d318958b9e4fa611cec87da276bfc58da3d17068",
+        "after_hash": "5b1cdb945184ab0cf95ed86e37ab2d02cee716d650fc22643b89541f07da880c"
+      },
+      {
+        "file": "packages/web/src/components/nav-items.ts",
+        "ranges": [
+          {
+            "start": 7,
+            "end": 7
+          },
+          {
+            "start": 40,
+            "end": 43
+          },
+          {
+            "start": 60,
+            "end": 60
+          },
+          {
+            "start": 74,
+            "end": 75
+          },
+          {
+            "start": 99,
+            "end": 99
+          },
+          {
+            "start": 106,
+            "end": 106
+          }
+        ],
+        "before_hash": "ce2d14860c63d5bf40abf389ebe73d7fd4449555641d7bfa520756edca674a63",
+        "after_hash": "a49c6c8c8678e7a0de53e3d049b42fdc7a95a2021c0672df64ebf542d31a1531"
+      },
+      {
+        "file": "packages/web/src/routes/terminal/terminal.tsx",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 204
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "ea53221aa35c9ba3dc1f94a55beb74d674a28d7fa664453bfa57b104120476c6"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-10-10T18:26:25.348Z",
+    "completed_at": "2026-10-10T18:26:27.764Z",
+    "duration_ms": 2416,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 2416,
+    "peakMemoryBytes": 110116864,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 0,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [
+    {
+      "finding_id": "mimosa-9e5616af59c01e9b7e6c9061",
+      "file": "packages/cezar/src/server/terminal.test.ts",
+      "line": 10,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-10-10T17:25:08.063Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-9e5616af59c01e9b7e6c9061",
+      "file": "packages/cezar/src/server/terminal.test.ts",
+      "line": 10,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "fixed_candidate",
+      "decision": "repair_observed",
+      "at": "2026-10-10T17:25:10.293Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "candidate_before_evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "post_change_evidence_hash_at_previous_location": "8c2d5f421e36c545d5dfc2834b18012e5ea8702e163ceffde3e5f7152b2c33a2",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-9e5616af59c01e9b7e6c9061",
+      "file": "packages/cezar/src/server/terminal.test.ts",
+      "line": 10,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "static_verified",
+      "decision": "static_rescan_passed",
+      "at": "2026-10-10T17:25:10.293Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "candidate_before_evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "post_change_evidence_hash_at_previous_location": "8c2d5f421e36c545d5dfc2834b18012e5ea8702e163ceffde3e5f7152b2c33a2",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-9e5616af59c01e9b7e6c9061",
+      "file": "packages/cezar/src/server/terminal.test.ts",
+      "line": 10,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-10-10T17:25:39.394Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-9e5616af59c01e9b7e6c9061",
+      "file": "packages/cezar/src/server/terminal.test.ts",
+      "line": 10,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "fixed_candidate",
+      "decision": "repair_observed",
+      "at": "2026-10-10T17:25:58.532Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "candidate_before_evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "post_change_evidence_hash_at_previous_location": "8c2d5f421e36c545d5dfc2834b18012e5ea8702e163ceffde3e5f7152b2c33a2",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-9e5616af59c01e9b7e6c9061",
+      "file": "packages/cezar/src/server/terminal.test.ts",
+      "line": 10,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "static_verified",
+      "decision": "static_rescan_passed",
+      "at": "2026-10-10T17:25:58.532Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "candidate_before_evidence_hash": "0c387bbdf6fda49e2c6c5b0faee66e039837f3f8fc27e2770e65a6afccd97809",
+        "post_change_evidence_hash_at_previous_location": "8c2d5f421e36c545d5dfc2834b18012e5ea8702e163ceffde3e5f7152b2c33a2",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    }
+  ],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_65f51cd4-72dd-4b9a-a718-6cf5cdf9dcc7-20261010T182627764Z-29780-48d86d607488.json",
+    "latest_report": ".mimosa/reports/task-review-sess_65f51cd4-72dd-4b9a-a718-6cf5cdf9dcc7.json",
+    "history_summary": ".mimosa/history/run-20261010T182627764Z-29780-48d86d607488.json"
+  }
+}

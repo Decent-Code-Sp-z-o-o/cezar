@@ -59,6 +59,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { terminalSessionBodySchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -205,6 +206,7 @@ import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, expandTilde } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
+import { createTerminalHub, terminalEnabled, type TerminalHub } from './terminal.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
@@ -315,6 +317,12 @@ export interface ServerDeps {
    *  to the HTTP server it binds. Optional so legacy callers/tests change
    *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
   socketHub?: SocketHub;
+  /** Web terminal hub (src/server/terminal.ts, spec 2026-10-10-terminal-tab).
+   *  `createApp` calls only `issue()` from the session route — `startServer`
+   *  builds one and wires its `handleUpgrade` as the socket hub's upgrade
+   *  delegate. Optional for the same reason as `socketHub`: tests and legacy
+   *  callers get a private hub whose HTTP half still answers. */
+  terminalHub?: TerminalHub;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
    *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
    *  container object, for instance) that CI machines do not have. */
@@ -3343,6 +3351,30 @@ export function createApp(deps: ServerDeps) {
       return c.json(merged);
     });
 
+  // ---- chained family: web terminal (project-scoped, opt-in CEZ_TERMINAL=1) ----
+  // One HTTP shape: the POST that mints a single-use upgrade token (spec
+  // 2026-10-10-terminal-tab). The terminal bytes never touch Hono — they ride the
+  // dedicated WS path the socket hub's delegate hands to `TerminalHub.handleUpgrade`
+  // (wired in `startServer`), because the upgrade event never reaches Hono at all.
+  // The gate is checked here AND in the hub AND in `capabilities()` (defense in
+  // depth): off — the default — the family answers 409 and nothing else exists.
+  const terminalHub = deps.terminalHub
+    ?? createTerminalHub({ verifyUpgrade: (req) => verifyWsUpgrade(req, bindHost) });
+  const terminalRoutes = new Hono<ProjectApiEnv>()
+    .post('/terminal/session', jsonZodValidator(terminalSessionBodySchema), (c) => {
+      if (!terminalEnabled()) {
+        return c.json({ error: 'the web terminal is disabled — set CEZ_TERMINAL=1 and restart cezar' }, 409);
+      }
+      const project = c.get('project');
+      const issued = terminalHub.issue({
+        projectId: project.id,
+        root: project.root,
+        cols: c.req.valid('json').cols,
+        rows: c.req.valid('json').rows,
+      });
+      return issued.status === 200 ? c.json(issued.body) : c.json({ error: issued.error }, issued.status);
+    });
+
   // ---- chained family: workflows (project-scoped) --------------------------
   // One chained expression, mounted by `createApp` into BOTH the legacy `api`
   // table and the versioned `v1` one — see `healthRoutes` for why the chain
@@ -6228,7 +6260,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', trackerRoutes)
     .route('/', repoRoutes)
     .route('/', configRoutes)
-    .route('/', agentConfigRoutes);
+    .route('/', agentConfigRoutes)
+    .route('/', terminalRoutes);
 
   // ---- chained family: the cross-project run index (workspace-level) -------
   /**
@@ -6475,6 +6508,11 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
+  // The terminal hub rides the same pattern: startServer owns it (its upgrade
+  // half is wired as the socket hub's delegate below), createApp gets it to
+  // answer the session POST from the same instance the sockets speak to.
+  const terminalHub = deps.terminalHub
+    ?? createTerminalHub({ verifyUpgrade: (req) => verifyWsUpgrade(req, deps.bindHost) });
   const bootProjectId = deps.bootProjectId ?? 'default';
   // `pinned`: the boot project is served whether or not the registry holds it,
   // and since boot registration became seed-once it usually does NOT — then
@@ -6505,6 +6543,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     workspaceEvents,
     skillsUpdate,
     socketHub,
+    terminalHub,
     automationsChanged: () => rescheduleAutomations(),
   });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
@@ -6615,8 +6654,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
-  socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
+  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); terminalHub.close(); });
+  socketHub.attach(
+    server,
+    (req) => verifyWsUpgrade(req, deps.bindHost),
+    // One `upgrade` listener routes every path: the bus keeps `/api/v1/ws`,
+    // the terminal hub claims `/api/v1/p/:projectId/terminal/ws`, anything
+    // else is destroyed exactly as before.
+    (req, socket, head) => terminalHub.handleUpgrade(req, socket, head),
+  );
   return server;
 }
 

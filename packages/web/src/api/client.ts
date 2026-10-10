@@ -127,6 +127,7 @@ import type {
   TrackerItemResponse,
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
+  TerminalSessionResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
@@ -2355,4 +2356,19 @@ export async function readTrackerWatch(projectId: string, watchId: string, signa
 export async function refreshTrackerWatch(projectId: string, watchId: string, signal: AbortSignal) {
   return trackerWatchSnapshotSchema.parse(await unwrap(await cez.api.v1.p[':projectId'].tracker.watch[':watchId'].$post(
     { param: { projectId, watchId } }, { init: { signal } }), '/tracker/watch'))
+}
+
+/** The web Terminal tab (spec `.ai/specs/2026-10-10-terminal-tab.md`): mint a
+ *  single-use upgrade token for a PTY session in the project root. 409 while
+ *  `CEZ_TERMINAL=1` is not set — the view renders the enable hint instead. */
+export async function createTerminalSession(
+  body: { cols?: number; rows?: number },
+): Promise<TerminalSessionResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.session.$post({
+      param: { projectId: queryScope() },
+      json: body,
+    }),
+    '/terminal/session',
+  )
 }

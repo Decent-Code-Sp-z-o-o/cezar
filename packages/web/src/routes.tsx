@@ -21,6 +21,7 @@ import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
 import { SkillsLoading } from './routes/skills-loading'
+import { TerminalLoading } from './routes/terminal/terminal-loading'
 import { UnknownProjectRoute } from './routes/unknown-project'
 import { WorkflowsLoading } from './routes/workflows/workflows-loading'
 import { GitTabLoading } from './routes/task-git/git-tab-loading'
@@ -90,6 +91,7 @@ const WorkflowsRoute = lazy(() =>
  *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
  *  bundle as a static Settings section). */
 const SkillsRoute = lazy(() => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
+const TerminalRoute = lazy(() => import('./routes/terminal/terminal').then((m) => ({ default: m.TerminalRoute })))
 
 /** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-
  *  runs preview), the week/day calendars, and the log — ~3k lines nothing outside this route
@@ -301,6 +303,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/github/*', pageLabel: 'GitHub' },
   { pattern: '/tracker/*', pageLabel: 'Tracker' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
+  { pattern: '/terminal', pageLabel: 'Terminal' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
   { pattern: '/workflows/*', pageLabel: 'Workflows' },
@@ -525,6 +528,19 @@ export const AppRoutes = memo(function AppRoutes() {
         {/* The follow-up inbox (R6 Step 1.2): light — no markdown stack — so it rides the main
             bundle like the overview does. */}
         <Route path="inbox" element={<InboxRoute />} />
+
+        {/* The web terminal (spec 2026-10-10-terminal-tab): xterm over a token-gated WS to a PTY
+            in the project root. Opt-in — the view itself renders the enable hint while
+            `capabilities.terminal` is false, but the route exists either way so a direct URL is
+            honest about the feature. */}
+        <Route
+          path="terminal"
+          element={
+            <Suspense fallback={<TerminalLoading />}>
+              <TerminalRoute />
+            </Suspense>
+          }
+        />
 
         {/* The workflow builder (R6 Step 1.6): /workflows opens the canvas on the repo's first
             saved chain, /workflows/:name deep-links a specific one. */}
