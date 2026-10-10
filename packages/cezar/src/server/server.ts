@@ -6125,24 +6125,27 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: `not a regular file: ${result.path}` }, 409);
       }
       if (wantsRaw) {
-        const mime = imageMimeType(result.path);
-        if (mime === null || result.tooLarge) {
-          // `?raw=1` asked for bytes, so it hears why it cannot have them; a mere `Accept`
-          // preference falls through to the JSON answer. Same split as `/runs/:id/files`.
-          if (query.raw !== undefined) {
-            const error =
-              mime === null
-                ? `raw serving is limited to images: ${result.path}`
-                : `file too large to serve raw (${result.size} bytes): ${result.path}`;
-            return c.json({ error }, 409);
-          }
-        } else {
+        // The FLAG is the only way to ask for the wider preview types; an `Accept` keeps
+        // negotiating images only — exactly the surface it negotiated before the allowlist widened.
+        const preview = previewMimeType(result.path);
+        const allowed =
+          preview !== null && (query.raw === '1' || preview.kind === 'image') && result.size <= RAW_PREVIEW_CAP;
+        if (allowed) {
           const bytes = await readFile(join(info.root, result.path));
           return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
-            'content-type': mime,
+            'content-type': preview.mime,
             'x-content-type-options': 'nosniff',
             'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
           });
+        }
+        // `?raw=1` asked for bytes, so it hears why it cannot have them; a mere `Accept`
+        // preference falls through to the JSON answer. Same split as `/runs/:id/files`.
+        if (query.raw !== undefined) {
+          const error =
+            preview === null
+              ? `raw serving is limited to previewable file types (images, pdf, video, audio, html): ${result.path}`
+              : `file too large to serve raw (${result.size} bytes): ${result.path}`;
+          return c.json({ error }, 409);
         }
       }
       return c.json({
@@ -6153,6 +6156,7 @@ export function createApp(deps: ServerDeps) {
         size: result.size,
         binary: result.binary,
         tooLarge: result.tooLarge,
+        ...(result.preview !== undefined ? { preview: result.preview } : {}),
         ...(result.content !== undefined ? { content: result.content } : {}),
       });
     })
