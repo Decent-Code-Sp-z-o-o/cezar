@@ -8,7 +8,7 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
-import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
+import { trackerAssociationSchema, trackerAutomationEventSchema, trackerKindSchema } from './tracker.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -221,7 +221,7 @@ export const runRecordSchema = z.object({
       automationId: z.string(),
       automationRevision: z.number(),
       receiptId: z.string(),
-      provider: z.enum(['jira', 'linear']),
+      provider: trackerKindSchema,
       association: trackerAssociationSchema.optional(),
       eventId: z.string().optional(),
       event: trackerAutomationEventSchema.optional(),

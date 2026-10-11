@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemsResultSchema } from '@open-mercato/cezar-contract';
 import { createDryTrackerClient } from './dry-run.ts';
 
-for (const kind of ['jira', 'linear'] as const) describe(`${kind} offline fixture`, () => {
+for (const kind of ['jira', 'linear', 'backlog'] as const) describe(`${kind} offline fixture`, () => {
+  const prefix = kind === 'jira' ? 'DEMO' : kind === 'linear' ? 'ENG' : 'EPIC';
+  const webUrl = kind === 'jira' ? 'https://demo.atlassian.net' : kind === 'linear' ? 'https://linear.app/demo' : 'file:///demo/backlog';
   it('reaches candidate 51 and preserves long handoff descriptions', async () => {
     const client = createDryTrackerClient(kind);
     const first = await client.listCandidates(trackerCandidatesQuerySchema.parse({ kind }));
@@ -17,7 +19,7 @@ for (const kind of ['jira', 'linear'] as const) describe(`${kind} offline fixtur
     expect(trackerItemsResultSchema.safeParse(list).success).toBe(true);
     if (!list.available) throw new Error('fixture list failed');
     expect(list.items.find(row => row.id.endsWith('-2'))?.bodyTruncated).toBe(true);
-    const detail = await driver.getItem(kind === 'jira' ? 'DEMO51-2' : 'ENG51-2');
+    const detail = await driver.getItem(`${prefix}51-2`);
     expect(detail.available && detail.item.body).toContain('Acceptance: preserve all requirements.');
     expect(detail.available && detail.item.bodyTruncated).toBe(false);
     const search = await driver.searchItems(trackerSearchQuerySchema.parse({ q: 'task 125' }));
@@ -25,10 +27,10 @@ for (const kind of ['jira', 'linear'] as const) describe(`${kind} offline fixtur
   });
   it('rejects forged and cross-project direct lookups', async () => {
     const client = createDryTrackerClient(kind);
-    const assoc = { kind, source: { id: `dry-${kind}`, webUrl: kind === 'jira' ? 'https://demo.atlassian.net' : 'https://linear.app/demo' }, externalId: '1', externalName: 'One' };
+    const assoc = { kind, source: { id: `dry-${kind}`, webUrl }, externalId: '1', externalName: 'One' };
     const first = client.driver(assoc);
     const second = client.driver({ ...assoc, externalId: '2' });
-    const id = kind === 'jira' ? 'DEMO1-1' : 'ENG1-1';
+    const id = `${prefix}1-1`;
     expect(await first.getItem(id)).toMatchObject({ available: true });
     expect(await second.getItem(id)).toMatchObject({ available: false, code: 'not_found' });
     expect(await client.driver({ ...assoc, externalId: '9999' }).getItem(id)).toMatchObject({ available: false });

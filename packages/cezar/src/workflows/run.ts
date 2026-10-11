@@ -1141,6 +1141,9 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
 
+  /** See the constructor option of the same name. */
+  private readonly completeTrackerItem: ((root: string, provenance: NonNullable<RunRecord['automationTracker']>) => Promise<void>) | undefined;
+
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
@@ -1153,11 +1156,18 @@ export class RunManager {
        * reach an agent. Secrets are registered with RunStore before any output arrives.
        */
       resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
+      /**
+       * Tick the tracker item a settled run was launched from, when the tracker can be
+       * written (the file-backed backlog provider). Best-effort: failures are logged on
+       * the run, never settled into it.
+       */
+      completeTrackerItem?: (root: string, provenance: NonNullable<RunRecord['automationTracker']>) => Promise<void>;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
+    this.completeTrackerItem = options.completeTrackerItem;
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
@@ -3518,7 +3528,8 @@ export class RunManager {
    *  On a run already resting at `review` (no session — the engine loop is
    *  over), "Finish" is the third review exit: accept the changes without a
    *  PR and flip straight to `done`. */
-  finish(runId: string): boolean {
+  /** Async since the tracker completion write-back joined the review-accepted settle. */
+  async finish(runId: string): Promise<boolean> {
     const state = this.active.get(runId);
     if (state?.graphFinish && !state.session?.open) {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user at a workflow wait' });
@@ -3544,6 +3555,7 @@ export class RunManager {
     if (run?.status === 'review' && !this.isActive(runId)) {
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+      await this.settleTrackerCompletion(runId);
       return true;
     }
     return false;
@@ -6320,6 +6332,29 @@ export class RunManager {
         ? 'changes ready for review — send feedback, open a draft PR, or finish'
         : 'run finished',
     });
+    if (!review) await this.settleTrackerCompletion(runId);
+  }
+
+  /**
+   * The completion write-back: a run launched from a writable tracker — the file-backed
+   * backlog — ticks its item's checkbox when the run settles `done`. A run parked at the
+   * review gate has not been accepted yet, so its flip waits for the review's Finish.
+   * Best-effort: a failed flip is lifecycle-logged on the run and left for the human (or
+   * the agent's own tick) — it never changes how the run settled.
+   */
+  private async settleTrackerCompletion(runId: string): Promise<void> {
+    if (!this.completeTrackerItem) return;
+    const run = this.store.getRun(runId);
+    if (!run?.automationTracker) return;
+    try {
+      await this.completeTrackerItem(this.repoRoot, run.automationTracker);
+      this.store.appendEvent(runId, { type: 'lifecycle', message: `tracker item completed: ${run.automationTracker.key}` });
+    } catch (error) {
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `tracker item completion skipped: ${error instanceof Error ? error.message : 'unknown error'}`,
+      });
+    }
   }
 
   /** Whether settling this run now would park it at the review gate (#489). */

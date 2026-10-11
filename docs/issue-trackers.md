@@ -1,14 +1,19 @@
-# Jira Cloud and Linear
+# Jira Cloud, Linear, and the local backlog
 
-Cezar can browse a Jira Cloud project or a Linear team and hand a selected issue to an
-agent. Each local project has one saved tracker connection. GitHub remains independent.
-Browsing performs no vendor writes. Enabled event automations can launch agent workflows as described below. The visible issue list checks its first page every 60 seconds; it stops when hidden or closed.
+Cezar can browse a Jira Cloud project, a Linear team, or the project's own `backlog/`
+directory of epic files and hand a selected item to an agent. Each local project has one
+saved tracker connection. GitHub remains independent.
+Browsing performs no vendor writes for Jira and Linear; the local file-backed backlog is the
+one provider with a write path (ticking a completed task's checkbox in its epic file).
+Enabled event automations can launch agent workflows as described below. The visible issue list checks its first page every 60 seconds; it stops when hidden or closed.
 
 ## Connect
 
-Open the project's **Settings → Issue tracker**, then **Configure Jira credentials** or
-**Configure Linear credentials**. Jira needs the site URL, account email and API token;
-Linear needs an API key. Use a token with read access restricted to the intended data.
+Open the project's **Settings → Issue tracker**, then **Configure Jira credentials**,
+**Configure Linear credentials**, or **Configure Backlog directory**. Jira needs the site
+URL, account email and API token; Linear needs an API key; the backlog needs only a
+project-root-relative directory (default `backlog`) and stores no secret. Use a token with
+read access restricted to the intended data.
 Save it, choose **Browse**, search for the project/team, then **Connect**. Discovery is
 paginated; **Load more** reaches later results. No server restart or environment editing
 is needed. Saving credentials is local; Browse/Connect verifies vendor access.
@@ -120,6 +125,33 @@ The [GraphQL API](https://linear.app/developers/graphql) describes key authentic
 Rotate or renew an expired token using Replace credentials in project Settings, then reconnect the scope.
 Changing the Jira site or Linear organization requires explicitly reconnecting the project;
 saved IDs are never silently retargeted.
+
+## The local backlog provider
+
+The third provider needs no credentials at all: it reads epic Markdown files from a
+project-root-relative directory (default `backlog`), one file per epic
+(`EPIC-015-kadry-i-place.md`). A task is a GitHub-Flavored-Markdown checkbox item —
+`- [ ]` is a task still to implement, `- [x]` is done. Everything else in the file is prose:
+Markdown links (`- [EPIC-006 …](./EPIC-006….md)`), numbered plans and headings are never
+read as tasks. The epic's `#` heading is the epic title; the epic file stem doubles as the
+task's label, so the browser's label filter selects one epic's tasks.
+
+Connecting works like the vendors: **Settings → Issue tracker → Configure Backlog**, confirm
+the directory (it must exist and contain at least one `.md` file), then **Browse** and
+**Connect**. Items surface with status `todo`/`done`; unchecked tasks are the active list —
+"the tasks to do". A task's `file:` URL anchors the exact line in the epic file, which is
+what an agent receives as its source when the item is handed off.
+
+The backlog is also the one tracker cezar can **write back to**. Completing a task — the
+`Mark done` action on an item, or a run launched from the task that settles `done` (through
+an event automation) — ticks that one checkbox (`- [ ]` → `- [x]`) via an atomic
+same-directory replace that touches no other byte of the file, and records the completion so
+the next automation poll does not fire on cezar's own flip. Event automations support
+`issue.opened` (a new unchecked checkbox appears) and `issue.status_changed` (a checkbox
+flips in the file, from any cause except cezar's own completion); advertised statuses are
+`todo`/`done` and advertised labels are the epic file stems. Events come from comparing a
+checkbox snapshot between polls, so a change made while the server was down surfaces once,
+at detection time.
 
 ## Agent context
 

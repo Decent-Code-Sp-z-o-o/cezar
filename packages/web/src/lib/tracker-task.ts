@@ -23,7 +23,9 @@ export function trackerTaskPrompt(item: TrackerItem, options: TrackerPromptOptio
     `Source: ${item.url}`,
     `Status: ${item.status}\nAuthor: ${item.author}\nLabels: ${item.labels.length ? item.labels.join(', ') : '(none)'}`,
     `Description:\n${item.body.trim() || '(No description was provided.)'}`,
-    'Tracker snapshot scope: description only; comments, attachments, and custom fields are not included.',
+    item.url.startsWith('file:')
+      ? 'Backlog snapshot scope: the description is an excerpt of the epic file. Read the epic file at the source path for the full goal, acceptance criteria and plan; the checkbox line is the task.'
+      : 'Tracker snapshot scope: description only; comments, attachments, and custom fields are not included.',
   ]
   const losses = trackerLosses(item)
   if (losses.length) parts.push(`Snapshot limitations:\n${losses.map((loss) => `- ${loss}`).join('\n')}`)

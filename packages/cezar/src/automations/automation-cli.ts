@@ -40,7 +40,7 @@ export interface AutomationCliIo {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = `cez automation — create and manage automations (GitHub/Jira/Linear event polls and schedules) on a running cockpit
+const USAGE = `cez automation — create and manage automations (GitHub/Jira/Linear/backlog event polls and schedules) on a running cockpit
 
   cez automation schema                         print the definition shape, bounds and prompt placeholders
   cez automation create [--file <def.json> | --json '<json>'] [--enable]

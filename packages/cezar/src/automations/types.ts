@@ -4,6 +4,7 @@ import {
   trackerTriggerSchema,
   trackerAutomationEventSchema,
   trackerAssociationSchema,
+  trackerKindSchema,
   automationScheduleSchema,
   type AutomationSchedule,
 } from '@open-mercato/cezar-contract';
@@ -225,7 +226,7 @@ export const automationReceiptSchema = z
     trackerCandidate: z
       .object({
         eventId: z.string(), timestamp: z.string().datetime(), tieBreaker: z.string(),
-        provider: z.enum(['jira', 'linear']), key: z.string().min(1),
+        provider: trackerKindSchema, key: z.string().min(1),
         event: trackerAutomationEventSchema.optional(),
         association: trackerAssociationSchema.optional(),
         issueId: z.string().optional(),

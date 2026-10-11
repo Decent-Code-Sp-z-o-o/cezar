@@ -19,7 +19,8 @@ export function TrackerSection() {
   const [origin, setOrigin] = useState('')
   const [email, setEmail] = useState('')
   const [secret, setSecret] = useState('')
-  const resetSecrets = () => { setSecret(''); setEmail(''); setOrigin(''); setCredentialKind(null) }
+  const [dir, setDir] = useState('backlog')
+  const resetSecrets = () => { setSecret(''); setEmail(''); setOrigin(''); setDir('backlog'); setCredentialKind(null) }
   const activeProject = queryScope()
   useEffect(() => { resetSecrets(); setPickerOpen(false); setSelected(null) }, [activeProject])
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -88,7 +89,9 @@ export function TrackerSection() {
       if (!credentialKind) throw new Error('Choose a provider.')
       const result = await saveTrackerConnection(credentialKind === 'jira'
         ? { kind: 'jira', origin: origin.trim(), email: email.trim(), token: secret }
-        : { kind: 'linear', key: secret })
+        : credentialKind === 'linear'
+          ? { kind: 'linear', key: secret }
+          : { kind: 'backlog', dir: dir.trim() })
       return { ...result, projectId }
     },
     onSuccess: async result => {
@@ -179,12 +182,13 @@ export function TrackerSection() {
       {credentialKind ? (
         <form className="rounded-lg border border-border bg-card p-4" onSubmit={event => { event.preventDefault(); saveCredentials.mutate() }} autoComplete="off">
           <h2 className="font-medium">{TRACKER_PROVIDERS[credentialKind].label} credentials for this project</h2>
-          <p className="mt-2 text-xs text-muted-foreground">Saved in a private .env file for this project, without encryption. Use read-only access limited to this project's data. Saving replaces this project's connection and requires selecting its scope again.</p>
+          <p className="mt-2 text-xs text-muted-foreground">Saved in a private .env file for this project, without encryption.{credentialKind === 'backlog' ? ' The directory path is relative to the project root, e.g. backlog.' : " Use read-only access limited to this project's data."} Saving replaces this project's connection and requires selecting its scope again.</p>
           {credentialKind === 'jira' ? <>
             <label className="mt-3 block text-sm">Jira site URL<input aria-label="Jira site URL" type="url" required value={origin} onChange={event => setOrigin(event.target.value)} placeholder="https://your-site.atlassian.net" className="mt-1 block w-full rounded border bg-background p-2" /></label>
             <label className="mt-3 block text-sm">Account email<input aria-label="Account email" type="email" required value={email} onChange={event => setEmail(event.target.value)} className="mt-1 block w-full rounded border bg-background p-2" /></label>
           </> : null}
-          <label className="mt-3 block text-sm">API token<input aria-label="API token" type="password" autoComplete="new-password" required maxLength={8192} value={secret} onChange={event => setSecret(event.target.value)} className="mt-1 block w-full rounded border bg-background p-2" /></label>
+          {credentialKind === 'backlog' ? <label className="mt-3 block text-sm">Backlog directory<input aria-label="Backlog directory" type="text" required value={dir} onChange={event => setDir(event.target.value)} placeholder="backlog" className="mt-1 block w-full rounded border bg-background p-2" /></label> : null}
+          {credentialKind !== 'backlog' ? <label className="mt-3 block text-sm">API token<input aria-label="API token" type="password" autoComplete="new-password" required maxLength={8192} value={secret} onChange={event => setSecret(event.target.value)} className="mt-1 block w-full rounded border bg-background p-2" /></label> : null}
           <div className="mt-3 flex gap-2"><Button type="submit" disabled={credentialBusy}>Save project credentials</Button><Button type="button" variant="outline" disabled={credentialBusy} onClick={resetSecrets}>Cancel</Button></div>
         </form>
       ) : null}

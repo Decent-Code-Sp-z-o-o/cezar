@@ -129,6 +129,7 @@ import type {
   TrackerAssociationSavedResponse,
   TrackerCandidatesResponse,
   TrackerClearedResponse,
+  TrackerCompleteResponse,
   TrackerItemResponse,
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
@@ -144,6 +145,7 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  trackerCompleteResponseSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -358,11 +360,11 @@ type ResponseValidator<T> = {
  * Its own server cannot produce such a body (`contract-parity.test.ts` pins both response types
  * to these schemas) — this guards the boundary against a proxy, a stale server, or a stub.
  */
-async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>>(
+async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>, T extends OkJson<R> = OkJson<R>>(
   res: R,
   label: string,
-  schema: ResponseValidator<OkJson<R>>,
-): Promise<OkJson<R>> {
+  schema: ResponseValidator<T>,
+): Promise<T> {
   const status = res.status
   const parsed = await unwrap(res, label)
   const result = schema.safeParse(parsed)
@@ -953,6 +955,20 @@ export async function getTrackerItem(id: string, opts?: ReadOptions & { associat
       init(opts),
     ),
     `/tracker/${encodeURIComponent(id)}`,
+  )
+}
+
+/** Ticks a file-backed backlog checkbox; routes answer 409 for providers without completion,
+ *  404 for an unknown item. Validated (not merely cast) because the caller hands the returned
+ *  item straight to the cache. */
+export async function completeTrackerItem(id: string, opts?: ReadOptions & { association?: TrackerAssociation }): Promise<TrackerCompleteResponse> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].tracker[':id'].complete.$post(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: { expectedScope: opts?.association ? trackerReadScope(opts.association) : undefined } },
+      init(opts),
+    ),
+    `/tracker/${encodeURIComponent(id)}/complete`,
+    trackerCompleteResponseSchema,
   )
 }
 

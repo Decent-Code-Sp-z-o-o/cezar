@@ -8,6 +8,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import type { StatusDotTone } from '@/components/status-dot'
+import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 
 /**
  * The Automations surface's small formatting vocabulary (spec 2026-09-14-automations-redesign
@@ -97,7 +98,7 @@ export function triggerLabel(automation: Pick<AutomationDefinition, 'kind' | 'ev
   if (automation.kind === 'schedule' && automation.schedule) return scheduleLabel(automation.schedule)
   if (automation.kind === 'tracker') {
     const trigger = automation.trackerTrigger
-    const provider = trigger?.association.kind === 'jira' ? 'Jira' : trigger?.association.kind === 'linear' ? 'Linear' : 'Tracker'
+    const provider = trigger ? TRACKER_PROVIDERS[trigger.association.kind].label : 'Tracker'
     return trigger ? `${provider} · ${trigger.events.join(', ')}${trigger.targetStatusIds?.length ? ` → ${trigger.targetStatusIds.join(', ')}` : ''}${trigger.changedLabelIds?.length ? ` · labels ${trigger.changedLabelIds.join(', ')}` : ''} · every ${Math.round((automation.intervalSeconds ?? 1800) / 60)} min` : `${provider} · select an event to complete setup`
   }
   const events = (automation.events ?? []).join(', ')

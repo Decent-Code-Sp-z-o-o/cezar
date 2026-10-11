@@ -3,6 +3,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
 } from '@open-mercato/cezar-contract';
+import { requestFailure } from './tracker/transport.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
@@ -4517,11 +4518,11 @@ export function createApp(deps: ServerDeps) {
     })
 
     // "Finish": gracefully close a waiting session — the run completes as done.
-    .post('/runs/:id/finish', (c) => {
+    .post('/runs/:id/finish', async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      const finished = manager.finish(id);
+      const finished = await manager.finish(id);
       if (!finished) return c.json({ error: 'no open session' }, 409);
       return c.json({ finished: true });
     })
@@ -5813,6 +5814,32 @@ export function createApp(deps: ServerDeps) {
       const result = await driver.getItem(c.req.valid('param').id);
       if (!result.available && result.code === 'not_found') return c.json({ error: result.reason }, 404);
       return c.json(result, 200);
+    })
+    .post('/tracker/:id/complete', paramZodValidator(trackerItemParamsSchema), queryZodValidator(trackerItemQuerySchema), async (c) => {
+      const project = c.get('project');
+      // A flip is a project mutation: serialize it against Connect/Disconnect like the rest.
+      return mutateTracker(project.dataDir, async () => {
+        const driver = await trackers.driver(project.root, project.dataDir);
+        // Unlike the read routes, a mutation never answers 200 with a failure envelope:
+        // an unconfigured or changed scope is a 409 the client can tell apart from success.
+        if ('available' in driver) return c.json({ error: driver.reason }, 409);
+        const { expectedScope } = c.req.valid('query');
+        if (expectedScope !== undefined && expectedScope !== trackerReadScope(driver.association)) {
+          return c.json({ error: 'This tracker connection or scope changed. Reload the tracker view.' }, 409);
+        }
+        if (!driver.completeItem) return c.json({ error: 'This tracker cannot complete items. Only the file-backed backlog provider ticks a checkbox.' }, 409);
+        try {
+          const result = await driver.completeItem(c.req.valid('param').id);
+          if (!result.available) {
+            return c.json({ error: result.reason }, result.code === 'not_found' ? 404 : 409);
+          }
+          trackerWatches.invalidateProject(project.root);
+          return c.json({ item: result.item }, 200);
+        } catch (error) {
+          const failure = requestFailure(error);
+          return c.json({ error: failure.reason }, failure.code === 'not_found' ? 404 : 409);
+        }
+      });
     });
 
   const githubRoutes = new Hono<ProjectApiEnv>()

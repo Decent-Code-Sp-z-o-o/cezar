@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { agentTime, dayName, dayTime, logTime, relativeIn, resultTone, statusLabel, statusTone, timeOnly, triggerLabel, usd } from './automation-format'
 
 const WARSAW = 'Europe/Warsaw'
@@ -50,5 +51,17 @@ describe('automation-format', () => {
   it('labels a trigger per kind', () => {
     expect(triggerLabel({ kind: 'github', events: ['issue.opened'], intervalSeconds: 300 })).toBe('on issue.opened · every 5 min')
     expect(triggerLabel({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } })).toBe('weekdays at 07:30')
+    expect(triggerLabel({ kind: 'tracker', intervalSeconds: 1800, trackerTrigger: { association: trackerAssociation('jira'), events: ['issue.opened'] } })).toBe('Jira · issue.opened · every 30 min')
+    expect(triggerLabel({ kind: 'tracker', intervalSeconds: 1800, trackerTrigger: { association: trackerAssociation('linear'), events: ['issue.opened'] } })).toBe('Linear · issue.opened · every 30 min')
+    expect(triggerLabel({ kind: 'tracker', intervalSeconds: 1800, trackerTrigger: { association: trackerAssociation('backlog'), events: ['issue.opened'] } })).toBe('Backlog · issue.opened · every 30 min')
+    expect(triggerLabel({ kind: 'tracker', intervalSeconds: 1800 })).toBe('Tracker · select an event to complete setup')
   })
 })
+
+function trackerAssociation(kind: TrackerKind) {
+  return {
+    kind,
+    source: { id: 'source', webUrl: kind === 'backlog' ? 'file:///proj/backlog' : 'https://example.test' },
+    externalId: '100', externalName: 'Team',
+  }
+}

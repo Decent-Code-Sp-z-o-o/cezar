@@ -7,6 +7,7 @@ import { requestFailure } from './transport.ts';
 const FIXTURES = {
   jira: { webUrl: 'https://demo.atlassian.net', scopeLabel: 'Project', prefix: 'DEMO', itemPath: 'browse' },
   linear: { webUrl: 'https://linear.app/demo', scopeLabel: 'Team', prefix: 'ENG', itemPath: 'issue' },
+  backlog: { webUrl: 'file:///demo/backlog', scopeLabel: 'Epic', prefix: 'EPIC', itemPath: 'epics' },
 } satisfies Record<TrackerKind, { webUrl: string; scopeLabel: string; prefix: string; itemPath: string }>;
 
 /** Offline fixture covers pagination and long context without inheriting host credentials. */
