@@ -15,7 +15,7 @@ import {
   fileKey,
   widestLineChars,
 } from './diff-scroll'
-import { ImagePreview, shouldPreviewImage } from './image-preview'
+import { BinaryPreview, shouldPreviewImage } from './image-preview'
 import { canPreviewMarkdown } from './markdown'
 import { MarkdownPreview } from './markdown-preview'
 import {
@@ -765,13 +765,11 @@ function DiffFileBody({
     [mode, wrap, file.patch],
   )
 
-  // Only images with no text diff to lose take the preview branch — see `shouldPreviewImage`.
-  // An SVG git reports as text keeps its rows below, exactly as `DiffFallback` renders it.
-  if (shouldPreviewImage(file)) {
-    return <ImagePreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
-  }
-  if (file.binary) {
-    return <Note>Binary file — no text diff.</Note>
+  // A file with no text diff to lose takes the preview branch — images per `shouldPreviewImage`,
+  // pdf/video/audio/html by extension — through the same previews the Files tab renders. An SVG
+  // git reports as text keeps its rows below, exactly as `DiffFallback` renders it.
+  if (shouldPreviewImage(file) || file.binary) {
+    return <BinaryPreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
   }
   if (parsed.hunks.length === 0) {
     return <Note>{parsed.truncated ? 'Patch truncated by the server.' : 'No content changes (metadata only).'}</Note>

@@ -4,7 +4,7 @@ import type { DiffStat } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { cn } from '@/lib/utils'
 
-import { ImagePreview, shouldPreviewImage } from './image-preview'
+import { BinaryPreview, shouldPreviewImage } from './image-preview'
 import type { DiffFileChange, DiffProps } from './types'
 
 /**
@@ -133,10 +133,8 @@ function FallbackFile({
           <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
         </span>
       </header>
-      {shouldPreviewImage(file) ? (
-        <ImagePreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
-      ) : file.binary ? (
-        <p className="px-4 py-2.5 text-xs text-soft-foreground">Binary file — no text diff.</p>
+      {shouldPreviewImage(file) || file.binary ? (
+        <BinaryPreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
       ) : file.patch === '' ? (
         <p className="px-4 py-2.5 text-xs text-soft-foreground">No content changes (metadata only).</p>
       ) : (

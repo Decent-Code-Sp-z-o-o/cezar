@@ -46,4 +46,21 @@ describe('Diff fallback path', () => {
 
     expect(document.querySelector('[data-slot="diff-empty"]')?.textContent).toBe('No changes.')
   })
+
+  it('renders the same binary previews (pdf embed) the engine renders', async () => {
+    const PDF: DiffFileChange = {
+      path: 'docs/spec.pdf',
+      status: 'added',
+      adds: 0,
+      dels: 0,
+      binary: true,
+      patch: '',
+    }
+    render(<Diff files={[PDF]} imageSrc={(path) => `/raw/${path}`} />)
+
+    await screen.findByText('docs/spec.pdf')
+    const embed = document.querySelector('[data-slot="diff-file-embed"]')
+    expect(embed?.getAttribute('data-kind')).toBe('pdf')
+    expect(embed?.getAttribute('src')).toBe('/raw/docs/spec.pdf')
+  })
 })
