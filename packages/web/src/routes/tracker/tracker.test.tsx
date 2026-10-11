@@ -153,7 +153,50 @@ describe('Tracker route', () => {
     await waitFor(() => expect(detailCalls).toBe(2))
     expect((await screen.findByRole('button', { name: 'Retry in 1s' }) as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('marks an open backlog task done and refetches the item', async () => {
+    const association = {
+      kind: 'backlog' as const, source: { id: 'backlog', webUrl: 'file:///proj/backlog' }, externalId: 'backlog', externalName: 'backlog',
+    }
+    const requests: string[] = []
+    let done = false
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const path = new URL(url, 'http://localhost').pathname
+      requests.push(`${init?.method ?? 'GET'} ${path}`)
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+      if (url.endsWith('/tracker/association')) return json({ association })
+      if (init?.method === 'POST') return json({ item: backlogItem(done = true) })
+      if (path.endsWith('/tracker/EPIC-076-3')) return json({ available: true, item: backlogItem(done) })
+      if (path.endsWith('/tracker')) return json({ available: true, items: [backlogItem(done)], truncated: false })
+      return new Promise<never>(() => {})
+    }))
+    const client = createQueryClient()
+    render(
+      <MemoryRouter initialEntries={['/tracker/EPIC-076-3']}>
+        <QueryClientProvider client={client}>
+          <Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /Mark done/i }))
+    await waitFor(() => expect(requests.some((request) => request.startsWith('POST '))).toBe(true))
+    // The completion refetches the detail (and the list) through the tracker invalidation prefix.
+    expect((await screen.findAllByText('done')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /Mark done/i })).toBeNull()
+    expect(requests.filter((request) => request.endsWith('/tracker/EPIC-076-3')).length).toBeGreaterThan(1)
+  })
 })
+
+function backlogItem(done: boolean) {
+  return {
+    kind: 'issue', id: 'EPIC-076-3', title: 'Wire the backlog checkbox write-back', author: 'cezar',
+    createdAt: '2026-09-18T10:00:00.000Z', updatedAt: '2026-09-19T10:00:00.000Z',
+    labels: ['EPIC-076'], body: `- [${done ? 'x' : ' '}] Wire the backlog checkbox write-back\n`,
+    bodyTruncated: false, unsupportedContent: false,
+    url: 'file:///proj/backlog/EPIC-076.md', status: done ? 'done' : 'todo',
+  }
+}
 
 function issue(id: string, title: string) {
   return {
