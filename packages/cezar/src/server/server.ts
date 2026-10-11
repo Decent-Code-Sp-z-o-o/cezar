@@ -5820,10 +5820,12 @@ export function createApp(deps: ServerDeps) {
       // A flip is a project mutation: serialize it against Connect/Disconnect like the rest.
       return mutateTracker(project.dataDir, async () => {
         const driver = await trackers.driver(project.root, project.dataDir);
-        if ('available' in driver) return c.json(driver, 200);
+        // Unlike the read routes, a mutation never answers 200 with a failure envelope:
+        // an unconfigured or changed scope is a 409 the client can tell apart from success.
+        if ('available' in driver) return c.json({ error: driver.reason }, 409);
         const { expectedScope } = c.req.valid('query');
         if (expectedScope !== undefined && expectedScope !== trackerReadScope(driver.association)) {
-          return c.json({ available: false as const, code: 'source_changed' as const, reason: 'This tracker connection or scope changed. Reload the tracker view.' }, 200);
+          return c.json({ error: 'This tracker connection or scope changed. Reload the tracker view.' }, 409);
         }
         if (!driver.completeItem) return c.json({ error: 'This tracker cannot complete items. Only the file-backed backlog provider ticks a checkbox.' }, 409);
         try {

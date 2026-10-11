@@ -52,7 +52,7 @@ type Checks = [
   Assert<Mutual<TrackerAssociationInput, InferRequestType<typeof tracker.association.$put>['json']>>,
   Assert<Mutual<TrackerCandidatesQueryInput, InferRequestType<typeof tracker.candidates.$get>['query']>>,
   Assert<Mutual<TrackerItemQuery, InferRequestType<typeof scoped[':id']['complete']['$post']>['query']>>,
-  Assert<Mutual<TrackerItemParams, InferRequestType<typeof scoped[':id']['complete']['$post']>['param']>>,
+  Assert<Mutual<TrackerItemParams & { projectId: string }, InferRequestType<typeof scoped[':id']['complete']['$post']>['param']>>,
   Assert<Mutual<TrackerCompleteResponse, InferResponseType<typeof scoped[':id']['complete']['$post'], 200>>>,
   Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof scoped[':id']['complete']['$post'], 404>>>,
   Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof scoped[':id']['complete']['$post'], 409>>>,
