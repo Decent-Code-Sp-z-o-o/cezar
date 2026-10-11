@@ -958,9 +958,9 @@ export async function getTrackerItem(id: string, opts?: ReadOptions & { associat
   )
 }
 
-/** Ticks a file-backed backlog checkbox; routes answer 409 for providers without completion.
- *  Validated (not merely cast) because the route's 200 also carries the read-failure shape, and
- *  the caller hands the returned item straight to the cache. */
+/** Ticks a file-backed backlog checkbox; routes answer 409 for providers without completion,
+ *  404 for an unknown item. Validated (not merely cast) because the caller hands the returned
+ *  item straight to the cache. */
 export async function completeTrackerItem(id: string, opts?: ReadOptions & { association?: TrackerAssociation }): Promise<TrackerCompleteResponse> {
   return unwrapValidated(
     await cez.api.v1.p[':projectId'].tracker[':id'].complete.$post(
