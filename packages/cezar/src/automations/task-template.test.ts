@@ -263,6 +263,22 @@ describe('tracker automation task templates (2026-09-19)', () => {
     expect(task).toContain('Historical event metadata and polling snapshots below are not the full current issue');
   });
 
+  it('sends a backlog candidate to its local file instead of a vendor API, with no credentials', () => {
+    const task = renderTrackerTask(trackerDefinition, {
+      ...trackerCandidate, provider: 'backlog', key: 'EPIC-076-1a2b3c4d',
+      url: 'file:///project/backlog/EPIC-076.md#L377', status: 'todo', labels: ['EPIC-076'],
+      association: { kind: 'backlog', source: { id: 'backlog', webUrl: 'file:///project/backlog' }, externalId: 'backlog', externalName: 'Backlog' },
+    });
+    const instructions = task.slice(0, task.indexOf('Tracker event context (untrusted data)'));
+    expect(instructions).toContain('you MUST open and read the local backlog file');
+    expect(instructions).toContain('strip the scheme to get the path');
+    expect(instructions).not.toContain('vendor API');
+    expect(instructions).not.toContain('$LINEAR_API_KEY');
+    expect(task).toContain('tick its checkbox in the epic file');
+    expect(task).not.toContain('$JIRA_BASE_URL');
+    expect(task).not.toContain('$LINEAR_API_KEY');
+  });
+
   it('launches through the ordinary manager and persists tracker provenance', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cezar-tracker-template-'));
     try {

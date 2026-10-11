@@ -14,6 +14,14 @@ it('round trips Jira metadata and credentials', () => {
     origin: 'https://example.atlassian.net', email: 'user+tag@example.com', token: 'dummy:#=token' } };
   expect(decodeConnectionEnv(encodeConnectionEnv(record))).toEqual(record);
 });
+it('round trips the secret-free backlog directory and keeps its digest per directory', () => {
+  const record = { id: randomUUID(), projectRoot: '/tmp/project', credentials: { kind: 'backlog' as const, dir: 'backlog' } };
+  expect(decodeConnectionEnv(encodeConnectionEnv(record))).toEqual(record);
+  const expected = createHash('sha256').update(JSON.stringify(['backlog', 'backlog'])).digest('hex');
+  expect(encodeConnectionEnv(record)).toContain(`CREDENTIAL_SHA256='${expected}'`);
+  const other = { ...record, credentials: { kind: 'backlog' as const, dir: 'docs/backlog' } };
+  expect(encodeConnectionEnv(other)).not.toContain(expected);
+});
 it('rejects unsupported and control characters without printing input in errors', () => {
   for (const key of ['dummy\nINJECTED=value', 'dummy\rvalue', 'dummy\0value', 'dummy\tvalue', 'dummy"\'`#']) {
     expect(() => encodeConnectionEnv({ id: randomUUID(), projectRoot: '/tmp/project', credentials: { kind: 'linear', key } })).toThrow();

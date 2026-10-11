@@ -78,7 +78,7 @@ export function flipTaskLine(text: string, line: number): string | null {
   const lines = text.split(/(?<=\n)/);
   const target = lines[line - 1];
   if (target === undefined) return null;
-  const flipped = target.replace(/^(\s*(?:[-*+]|\d+[.)])\s+)\[ \]/, '$1[x]');
+  const flipped = target.replace(/^(\s*(?:[-*+]|\d+[.)])\s+)\[ \](?=\s+\S)/, '$1[x]');
   if (flipped === target) return null;
   lines[line - 1] = flipped;
   return lines.join('');
