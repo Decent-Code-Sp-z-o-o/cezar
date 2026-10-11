@@ -19,6 +19,8 @@ export interface TrackerDriver {
   listIssues(query: TrackerListQuery): Promise<TrackerItemsResult>;
   searchItems(query: TrackerSearchQuery): Promise<TrackerItemsResult>;
   getItem(id: string): Promise<TrackerItemResult>;
+  /** Tick the item's checkbox in place; only providers that can write (the file-backed one) implement it. */
+  completeItem?(id: string): Promise<TrackerItemResult>;
 }
 
 /** Complete compiled-in provider seam. Construction must perform no network I/O. */

@@ -13,7 +13,7 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, trackerKindSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -218,7 +218,7 @@ export const runRecordSchema = z.object({
       automationId: z.string(),
       automationRevision: z.number().int().positive(),
       receiptId: z.string(),
-      provider: z.enum(['jira', 'linear']),
+      provider: trackerKindSchema,
       association: trackerAssociationSchema.optional(),
       eventId: z.string().optional(),
       event: trackerAutomationEventSchema.optional(),

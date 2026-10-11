@@ -1,10 +1,14 @@
 import { z } from 'zod';
 
-/** Jira Cloud and Linear are the two read-only tracker providers supported by this contract. */
-export const trackerKindSchema = z.enum(['jira', 'linear']);
+/** Jira Cloud and Linear are the remote read-only tracker providers; `backlog` is the local
+ *  file-backed provider — a project directory of epic Markdown files whose GFM checkbox items
+ *  (`- [ ]` open, `- [x]` done) are the tasks, with completion written back into the file. */
+export const trackerKindSchema = z.enum(['jira', 'linear', 'backlog']);
 export type TrackerKind = z.infer<typeof trackerKindSchema>;
 
-const httpsUrlSchema = z.url({ protocol: /^https$/ });
+/** Vendor links are https; the local file-backed provider links into the project with `file:`
+ *  URLs (the agent handoff embeds `item.url`, and for a coding agent a file URL is openable). */
+const trackerLinkSchema = z.url({ protocol: /^(https|file)$/ });
 const nonemptyStringSchema = z.string().min(1);
 const trackerCursorSchema = z.string().min(1).max(4096);
 
@@ -12,7 +16,7 @@ const trackerCursorSchema = z.string().min(1).max(4096);
 export const trackerSourceSchema = z
   .object({
     id: nonemptyStringSchema,
-    webUrl: httpsUrlSchema,
+    webUrl: trackerLinkSchema,
   })
   .strict();
 export type TrackerSource = z.infer<typeof trackerSourceSchema>;
@@ -73,7 +77,7 @@ export const trackerItemSchema = z
     body: z.string(),
     bodyTruncated: z.boolean(),
     unsupportedContent: z.boolean(),
-    url: httpsUrlSchema,
+    url: trackerLinkSchema,
     status: z.string(),
   })
   .strict();
@@ -282,6 +286,12 @@ export type TrackerCandidatesQuery = z.output<typeof trackerCandidatesQuerySchem
 
 const trackerExpectedScopeSchema = z.string().max(4096).optional();
 
+/** Completing a task ticks its checkbox in the epic file. `POST /tracker/:id/complete` takes no
+ *  body — the optional `expectedScope` guard rides the query string, as on the item read route.
+ *  Only the file-backed provider implements it; routes answer 409 for providers without it. */
+export const trackerCompleteResponseSchema = z.object({ item: trackerItemSchema }).strict();
+export type TrackerCompleteResponse = z.infer<typeof trackerCompleteResponseSchema>;
+
 export const trackerItemQuerySchema = z.object({ expectedScope: trackerExpectedScopeSchema });
 export type TrackerItemQuery = z.infer<typeof trackerItemQuerySchema>;
 
@@ -330,9 +340,16 @@ export type TrackerAssociationSavedResponse = z.infer<typeof trackerAssociationS
 
 /** Write-only project credentials. Never return this shape from an HTTP handler. */
 const trackerSecretSchema = z.string().trim().min(1).max(8192);
+/** Project-root-relative backlog directory: no absolute paths, no traversal, no empty segments. */
+export const trackerBacklogDirSchema = z.string().trim().min(1).max(512).refine(
+  (dir) => !dir.startsWith('/') && !dir.startsWith('\\') && !/^[a-z]:[\\/]/i.test(dir)
+    && dir.split(/[\\/]/).every((segment) => segment.length > 0 && segment !== '.' && segment !== '..'),
+  'Use a project-root-relative directory path',
+);
 export const trackerCredentialsSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('jira'), origin: z.string().max(512).regex(/^https:\/\/[a-z0-9][a-z0-9-]*\.atlassian\.net\/?$/i, 'Use an HTTPS Jira Cloud site origin'), email: z.email().max(320), token: trackerSecretSchema }).strict(),
   z.object({ kind: z.literal('linear'), key: trackerSecretSchema }).strict(),
+  z.object({ kind: z.literal('backlog'), dir: trackerBacklogDirSchema }).strict(),
 ]);
 export type TrackerCredentials = z.infer<typeof trackerCredentialsSchema>;
 export const trackerConnectionSchema = z.object({ id: z.uuid(), kind: trackerKindSchema }).strict();

@@ -1,10 +1,10 @@
-import type { TrackerAssociation, TrackerAutomationEvent } from '@open-mercato/cezar-contract';
+import type { TrackerAssociation, TrackerAutomationEvent, TrackerKind } from '@open-mercato/cezar-contract';
 
 export interface TrackerEventCandidate {
   eventId: string;
   timestamp: string;
   tieBreaker: string;
-  provider: 'jira' | 'linear';
+  provider: TrackerKind;
   event: TrackerAutomationEvent;
   association: TrackerAssociation;
   issueId: string;
