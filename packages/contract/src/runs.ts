@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { runnerSchema } from './health.ts';
+import { runnerRequestSchema, runnerSchema } from './health.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
@@ -169,6 +169,22 @@ export const runRecordSchema = z.object({
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
+  /**
+   * The run ASKED for `auto` (spec 2026-10-12-auto-provider-selection): cezar resolved the
+   * request to a concrete `runner` (above) at launch, and may have failed over mid-run. This is
+   * the request echo — the literal `'auto'`, never a runner id — so the cockpit can show request
+   * and decision as two different things. Absent on every pre-feature record and every run that
+   * named its runner.
+   */
+  runnerRequest: z.literal('auto').optional().catch(undefined),
+  /** Failover hops already spent on this run; absent (and 0) until the first hop. */
+  failoverCount: z.number().int().min(0).optional().catch(undefined),
+  /** Canonical providers exhausted on this run — grown monotonically per hop so a run can never
+   *  hop back onto the account that just died. Absent until the first usage-limit failover. */
+  excludedProviders: z.array(z.string()).optional().catch(undefined),
+  /** The model auto pinned at the last resolution, when cezar chose one. Absent when the pick
+   *  sent no model flag (locked mode, or the runner's own default). */
+  resolvedModel: z.string().optional(),
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
@@ -972,7 +988,8 @@ export const createRunInputBaseSchema = z
     steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
-    runner: runnerSchema.optional(),
+    /** The concrete backend, or `auto` — resolved at launch, never persisted as a runner. */
+    runner: runnerRequestSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
     agentProfile: z.string().max(64).optional(),

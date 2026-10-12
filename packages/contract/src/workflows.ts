@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { runnerSchema } from './health.ts';
+import { runnerRequestSchema, runnerSchema } from './health.ts';
 import { stepSecretsSchema } from './secrets.ts';
 
 /**
@@ -28,8 +28,10 @@ export const workflowStepDefSchema = z
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
-    /** Per-step agent backend override (falls back to the task / config default). */
-    runner: runnerSchema.optional(),
+    /** Per-step agent backend override (falls back to the task / config default). `auto` asks
+     *  cezar to pick the cheapest capable provider at the step's own launch (spec
+     *  2026-10-12-auto-provider-selection). */
+    runner: runnerRequestSchema.optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
     // check step
@@ -100,7 +102,8 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
-    runner: runnerSchema.optional(),
+    /** `auto` resolves at node launch (spec 2026-10-12-auto-provider-selection). */
+    runner: runnerRequestSchema.optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
     verdicts: z.array(verdictName).min(1).optional(),

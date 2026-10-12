@@ -660,8 +660,11 @@ const startRunSchema = z
     // (~25k tokens) is well past any hand-written task.
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
-    // Agent backend for this task (falls back to config `defaultRunner`).
-    runner: z.enum(RUNNER_IDS).optional(),
+    // Agent backend for this task (falls back to config `defaultRunner`). `auto` asks cezar to
+    // pick the cheapest capable provider at launch and fail over on exhaustion (spec
+    // 2026-10-12-auto-provider-selection Q2) — resolved before anything spawns, so the persisted
+    // record always carries a concrete runner plus the `runnerRequest` echo.
+    runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
     // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
     // own selection, then the discovered default. Bounded like a profile id in the workspace
     // schema, so a value this route accepts can never be degraded away by the next load.
@@ -944,7 +947,10 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: z.array(attachmentInputSchema).max(4).optional(),
-  runner: z.enum(RUNNER_IDS).optional(),
+  // The follow-up composer's runner override. `auto` re-resolves the choice for the reopened
+  // session at its own launch (spec 2026-10-12-auto-provider-selection) — the run's concrete
+  // backend switches only once the resolution lands.
+  runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
   model: z.string().max(200).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
    *  `POST /runs`' own `agentProfile`. Omitted = keep the account the run is already on. */
@@ -960,7 +966,9 @@ const continueSchema = z.object({
 // absent so it never touches `task`.
 const startTodoSchema = z
   .object({
-    runner: z.enum(RUNNER_IDS).optional(),
+    // `auto` rides like any runner value (spec 2026-10-12-auto-provider-selection): resolved at
+    // launch, never persisted as the run's runner.
+    runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
     model: z.string().max(200).optional(),
     prompt: z
       .string()
@@ -3726,12 +3734,14 @@ export function createApp(deps: ServerDeps) {
 
   /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
    *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
-   *  reference does. */
+   *  reference does. A definition that asks for `runner: 'auto'` is not checkable HERE — the
+   *  account binds to the provider the launch resolves to — so it is accepted and the launch's
+   *  own profile resolution degrades a dangling id, exactly like a stored reference does. */
   const automationAccountIssue = async (
     root: string,
-    task: { runner?: ProviderId; agentProfile?: string },
+    task: { runner?: ProviderId | 'auto'; agentProfile?: string },
   ): Promise<string | null> => {
-    if (task.agentProfile === undefined) return null;
+    if (task.agentProfile === undefined || task.runner === 'auto') return null;
     const runner = task.runner ?? (await loadConfig(root)).defaultRunner;
     const account = await resolveWorkspaceProfile(runner, task.agentProfile);
     return 'error' in account ? account.error : null;
@@ -4289,15 +4299,21 @@ export function createApp(deps: ServerDeps) {
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
-      const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const fallback: ProviderId | 'auto' = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
       const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
       // the page loaded) is answered honestly instead of quietly running on the default — the
       // opposite of how RESOLUTION treats a dangling reference, and deliberately so: a run
-      // replaying a stored id has no better answer than the default, a user does.
-      if (parsed.data.agentProfile !== undefined) {
-        const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
+      // replaying a stored id has no better answer than the default, a user does. Skipped for
+      // `runner: 'auto'` (spec 2026-10-12-auto-provider-selection): the account binds to the
+      // provider the launch resolves to, which is not knowable here, and a dangling id at launch
+      // already degrades through the profile RESOLUTION's own fallback.
+      if (parsed.data.agentProfile !== undefined && parsed.data.runner !== 'auto') {
+        const account = await resolveWorkspaceProfile(
+          parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner,
+          parsed.data.agentProfile,
+        );
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
       const variants = parsed.data.variants ?? 1;
@@ -4567,13 +4583,19 @@ export function createApp(deps: ServerDeps) {
       if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
-      const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
+      // `runner: 'auto'` gates nothing (spec 2026-10-12-auto-provider-selection): it names no
+      // provider to require — the continuation resolves against live availability at its own
+      // launch, so a 409 on any concrete guess would refuse a continue auto could serve.
+      const blocked = parsed.data.runner === 'auto'
+        ? null
+        : await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
       if (blocked) return c.json({ error: blocked }, 409);
       // The follow-up pill names an account the user just picked, so an id that has been deleted
       // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
       // USER can act on "unknown account", and reopening the session on another login silently
-      // would cross the very billing boundary accounts exist to draw.
-      if (parsed.data.agentProfile !== undefined) {
+      // would cross the very billing boundary accounts exist to draw. Skipped for `auto` — the
+      // account binds to the provider the launch resolves to, which is not knowable here.
+      if (parsed.data.agentProfile !== undefined && parsed.data.runner !== 'auto') {
         const provider = providerForExistingRun(run, parsed.data.runner);
         const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
@@ -5451,7 +5473,7 @@ export function createApp(deps: ServerDeps) {
           workflow = workflows.find((w) => w.name === 'quick-task') ?? QUICK_TASK_WORKFLOW;
         }
 
-        const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+        const fallback: ProviderId | 'auto' = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
         const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
         if (blocked) return c.json({ error: blocked }, 409);
 

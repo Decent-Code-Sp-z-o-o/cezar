@@ -705,8 +705,12 @@ function formatWakeInstant(at: Date): string {
 export interface StartRunInput {
   task: string;
   model?: string;
-  /** Agent backend chosen for this task (GUI). Unset = the config default. */
-  runner?: RunnerId;
+  /** Agent backend chosen for this task (GUI). Unset = the config default. `auto` asks cezar to
+   *  pick the cheapest capable provider at launch and fail over on exhaustion (spec
+   *  2026-10-12-auto-provider-selection Q2): it is a REQUEST, resolved to a concrete runner
+   *  before anything spawns — `execute()` carries the resolution, and the record persists the
+   *  echo in `runnerRequest` so a queued run survives a restart with the ask intact. */
+  runner?: RunnerId | 'auto';
   /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
    *  on `runner`. Unset = the project's own selection. Persisted on the record so the choice
    *  survives into resume and Continue, and so the thread can say which account did the work. */
@@ -1430,7 +1434,11 @@ export class RunManager {
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
-      runner: input.runner,
+      // `auto` never reaches the record (spec Q2): the CONCRETE resolution lands on `runner`
+      // when `execute()` launches, and the request echo rides `runnerRequest` so a queued run
+      // re-derives the ask after a restart (see `reviveQueuedRun`).
+      runner: input.runner !== 'auto' ? input.runner : undefined,
+      runnerRequest: input.runner === 'auto' ? 'auto' : undefined,
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
@@ -3651,7 +3659,10 @@ export class RunManager {
     opts: {
       text?: string;
       images?: PastedContent[];
-      runner?: RunnerId;
+      /** The follow-up composer's runner override. `auto` re-resolves the choice at the
+       *  continuation's own launch (spec 2026-10-12-auto-provider-selection) — never persisted
+       *  as the run's runner; the resolution writes the concrete id. */
+      runner?: RunnerId | 'auto';
       model?: string;
       /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
        *  account the run is already on. */
@@ -3673,7 +3684,7 @@ export class RunManager {
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
     if (!sessionStep?.sessionId) return { ok: false, error: 'no agent session to resume' };
-    const targetRunner = opts.runner ?? run.runner ?? 'claude';
+    const targetRunner = (opts.runner !== 'auto' ? opts.runner : undefined) ?? run.runner ?? 'claude';
     // Session ids are provider-owned opaque values. New records carry explicit
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
@@ -3727,7 +3738,8 @@ export class RunManager {
         run.agentProfile !== undefined &&
         targetRunner !== (run.runner ?? 'claude');
       this.store.updateRun(runId, {
-        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        // `auto` never reaches the record (spec Q2) — its continuation resolves at launch.
+        ...(opts.runner !== undefined && opts.runner !== 'auto' ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
           : inheritedPinIsForeign
@@ -4368,7 +4380,7 @@ export class RunManager {
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
-    const taskBackend: RunnerId = input.runner ?? config.defaultRunner;
+    const taskBackend: RunnerId = (input.runner !== 'auto' ? input.runner : undefined) ?? config.defaultRunner;
     // The account may have gone into a usage-limit hold since this run was dequeued — the queue
     // gate cannot be the only one, because dequeue is not the moment of no return. Nothing has
     // happened yet here, so the run goes back to the queue untouched (spec
@@ -4822,7 +4834,7 @@ export class RunManager {
         if (rendered.prompt) rendered.prompt = renderNodeRefs(rendered.prompt, outputs);
         const verdicts = node.verdicts ?? [];
         if (verdicts.length) rendered.prompt = `${rendered.prompt ?? '{{task}}'}\n\n${verdictInstruction(verdicts)}`;
-        const backend = node.runner ?? taskBackend;
+        const backend = (node.runner !== 'auto' ? node.runner : undefined) ?? taskBackend;
         const lastTurn = { text: '' };
         const failure = await this.runAgentStep(
           runId,
@@ -5774,7 +5786,7 @@ export class RunManager {
     }
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
-    const backend = step.runner ?? taskBackend;
+    const backend = (step.runner !== 'auto' ? step.runner : undefined) ?? taskBackend;
     this.store.updateStep(runId, step.id, { sessionId, backend });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
@@ -6027,7 +6039,7 @@ export class RunManager {
       }
     };
 
-    const stepBackend = step.runner ?? taskBackend;
+    const stepBackend = (step.runner !== 'auto' ? step.runner : undefined) ?? taskBackend;
     // Normalise the selected model to canonical `provider/model` and back to the
     // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
     // unresolvable model (e.g. a bare id on opencode) returns the step error

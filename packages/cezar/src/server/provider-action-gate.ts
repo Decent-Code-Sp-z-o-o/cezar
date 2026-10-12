@@ -19,11 +19,17 @@ const LABEL: Record<ProviderId, string> = {
 
 export function providersRequiredByWorkflow(
   workflow: WorkflowDef,
-  fallback: ProviderId,
+  fallback: ProviderId | 'auto',
 ): ProviderId[] {
   const required = new Set<ProviderId>();
   for (const step of workflow.steps) {
-    if (stepKind(step) === 'agent') required.add(step.runner ?? fallback);
+    if (stepKind(step) === 'agent') {
+      const runner = step.runner ?? fallback;
+      // `auto` (spec 2026-10-12-auto-provider-selection) names no provider to require: the
+      // launch resolves against live availability and degrades honestly when nothing is usable,
+      // so gating on any concrete guess here would 409 a run auto could serve elsewhere.
+      if (runner !== 'auto') required.add(runner);
+    }
   }
   return ORDER.filter((provider) => required.has(provider));
 }
