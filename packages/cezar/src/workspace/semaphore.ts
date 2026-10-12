@@ -46,6 +46,12 @@ export interface WorkspaceResourceLimits {
   monitoringWakeIntervalMinutes?: number | null;
   /** Resume a run stopped by a provider usage limit when that limit resets. Default ON. */
   autoResumeOnUsageLimit?: boolean;
+  /**
+   * Auto provider selection (spec 2026-10-12-auto-provider-selection, Q6), resolved to its
+   * defaults. Absent (an older `load` stub, a partial `initial`) reads as the shipped defaults,
+   * exactly like `autoResumeOnUsageLimit`.
+   */
+  autoProvider?: { enabled: boolean; maxFailovers: number; maxWaitMinutes: number };
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
   memoryLimitMb: number | null;
   /**
@@ -116,6 +122,7 @@ const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   idleTimeoutMinutes: DEFAULT_IDLE_TIMEOUT_MINUTES,
   monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
   autoResumeOnUsageLimit: true,
+  autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 },
   memoryLimitMb: null,
 };
 
@@ -137,6 +144,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     idleTimeoutMinutes: resources.idleTimeoutMinutes,
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
+    autoProvider: resources.autoProvider,
     memoryLimitMb: resources.memoryLimitMb,
     projectLimits,
   };
@@ -210,6 +218,15 @@ export class WorkspaceSemaphore {
    *  written before the key existed) reads as ON — the shipped default. */
   autoResumeOnUsageLimit(): boolean {
     return this.limits.autoResumeOnUsageLimit ?? true;
+  }
+
+  /**
+   * Auto provider selection's knobs (spec 2026-10-12-auto-provider-selection, Q6), resolved.
+   * Read live from the cached snapshot — the same refresh path as every other resource key, so a
+   * settings PUT flips it without a restart.
+   */
+  autoProvider(): { enabled: boolean; maxFailovers: number; maxWaitMinutes: number } {
+    return this.limits.autoProvider ?? DEFAULT_LIMITS.autoProvider!;
   }
 
   /** Cached per-task memory ceiling (MiB), or null for no limit. */

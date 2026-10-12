@@ -22,16 +22,38 @@ import {
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
-import { parseUsageLimit } from '../core/usage-limit.ts';
+import { parseUsageLimit, type UsageLimitHit } from '../core/usage-limit.ts';
+import { costWeightedTokens } from '../core/usage.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import type { RunnerId } from '../core/agent-runner.ts';
+import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
+  BACKEND_MODEL_MAP,
   ModelIdentityError,
   formatModelIdentity,
   normalizeModelForBackend,
+  parseModelIdentity,
 } from '../core/model-identity.ts';
+import {
+  NATIVE_DEFAULT_TIER,
+  type AutoSelection,
+  type ModelUsageSample,
+  type ProviderAvailability,
+  type ProviderCandidate,
+  modelCostTier,
+  pickFailoverSelection,
+  resolveAutoSelection,
+} from '../core/provider-selection.ts';
+import { ProviderAuthService } from '../core/provider-auth.ts';
+import { applyProviderEnablement } from '../core/provider-availability.ts';
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
+import { discoverCodexModels } from '../core/codex-model-catalog.ts';
+import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
+import { discoverJunieModels } from '../core/junie-model-catalog.ts';
+import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import {
   HANDOFF_ONLY_INSTRUCTIONS,
   HANDOFF_INSTRUCTIONS,
@@ -691,6 +713,97 @@ function resumeInFlight(run: Pick<RunRecord, 'status' | 'autoResumeAttempts'>): 
 
 const AUTO_RESUME_PROMPT =
   'The provider usage limit that interrupted this task has reset. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+
+/**
+ * The opening prompt of a usage-limit FAILOVER continuation (spec 2026-10-12-auto-provider-
+ * selection): unlike a resume, the reopened turn runs on a DIFFERENT provider, so the fresh
+ * context must be told both facts — the switch is deliberate, and the handoff file is where the
+ * previous provider's session left the thread.
+ */
+const AUTO_FAILOVER_PROMPT =
+  'The provider this task was running on hit its usage limit, so the task is continuing on a different provider. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where it left off.';
+
+/**
+ * The lifecycle line naming one auto resolution (spec § UI/UX): the pick and, when a model was
+ * pinned, its cost tier. A pick that sends no model flag — locked mode (Q5) or the runner's own
+ * default — says `runner default` instead of a tier: the audit-truth tier there is 0, and
+ * printing "tier 0" would read as CHEAPEST when it is actually UNRATED (the resolver ranks it at
+ * the unknown tier precisely so it cannot win by construction).
+ */
+function autoPickLine(prefix: string, selection: AutoSelection): string {
+  const target = selection.model ? `${selection.runner}/${selection.model}` : selection.runner;
+  return selection.model
+    ? `${prefix} -> ${target} (tier ${selection.candidate?.tier ?? modelCostTier(selection.model)})`
+    : `${prefix} -> ${target} (runner default)`;
+}
+
+// ---- auto provider selection: the host half (spec 2026-10-12-auto-provider-selection) --------
+//
+// The resolver itself (`core/provider-selection.ts`) is pure; these are the process-local
+// singletons that feed it THIS host's truth. Process-wide (not per-manager) on purpose: auth
+// probes and model discovery spawn real CLIs behind TTL caches, and N managers each holding a
+// private cache would multiply exactly those spawns. The server keeps its own instances for its
+// routes — the answer each side caches is the same question about the same host, and neither
+// needs the other's cache to agree, only to be right within its own TTL.
+
+/** Lazily-built host singleton: every provider's connection state, stale-while-revalidate. */
+let hostProviderAuth: ProviderAuthService | undefined;
+/** Lazily-built host singleton: per-runner model discovery (`live | cache | unavailable`). */
+let hostModelCatalog: RunnerModelCatalog | undefined;
+
+/**
+ * The measured tie-break's raw material (spec Q1): this store's own past runs as usage samples,
+ * keyed by the canonical identity that served them. Records carry directional token counts but
+ * not the cache split `core/usage.ts` weights — the samples therefore approximate cost with
+ * input+output only, which is the same approximation every run of the same shape shares, so the
+ * COMPARISON between models stays honest even where the absolute number is low.
+ */
+function usageHistoryOf(runs: readonly RunRecord[]): ProviderAvailability['history'] {
+  const samples: ModelUsageSample[] = [];
+  for (const run of runs) {
+    const identity = run.modelIdentity ? parseModelIdentity(run.modelIdentity) : undefined;
+    if (!identity) continue;
+    const weighted = costWeightedTokens({
+      input_tokens: run.inputTokens,
+      output_tokens: run.outputTokens,
+    });
+    if (!weighted) continue;
+    samples.push({ provider: identity.provider, model: identity.model, costWeightedTokens: weighted });
+  }
+  return samples;
+}
+
+/**
+ * The failed run as a `ProviderCandidate`, for `pickFailoverSelection` (spec Q7). The canonical
+ * provider comes from the record's own `modelIdentity` first — it is the identity the run
+ * ACTUALLY ran under, so `pi` serving an anthropic model excludes `anthropic` exactly when it
+ * should — and falls back to deriving one from the runner + pinned model, mirroring the
+ * resolver's own fail-open mapping.
+ */
+function failedCandidateOf(run: RunRecord): ProviderCandidate | undefined {
+  const runner = run.runner;
+  if (!runner) return undefined;
+  const model = run.resolvedModel ?? run.model ?? '';
+  const identity = run.modelIdentity ? parseModelIdentity(run.modelIdentity) : undefined;
+  let provider = identity?.provider;
+  if (!provider) {
+    provider = BACKEND_MODEL_MAP[runner]?.defaultProvider ?? runner;
+    if (model) {
+      try {
+        provider = parseModelIdentity(model)?.provider ?? provider;
+      } catch {
+        // fall through to the default provider — fail-open, like the resolver
+      }
+    }
+  }
+  return {
+    runner,
+    model,
+    provider,
+    tier: model ? modelCostTier(model) : NATIVE_DEFAULT_TIER,
+  };
+}
+
 /**
  * The wake instant as a human reads it — local, to the SECOND, with the zone named. The
  * transcript line is what someone scanning a stalled task actually reads, and "18:41" is not
@@ -705,8 +818,12 @@ function formatWakeInstant(at: Date): string {
 export interface StartRunInput {
   task: string;
   model?: string;
-  /** Agent backend chosen for this task (GUI). Unset = the config default. */
-  runner?: RunnerId;
+  /** Agent backend chosen for this task (GUI). Unset = the config default. `auto` asks cezar to
+   *  pick the cheapest capable provider at launch and fail over on exhaustion (spec
+   *  2026-10-12-auto-provider-selection Q2): it is a REQUEST, resolved to a concrete runner
+   *  before anything spawns — `execute()` carries the resolution, and the record persists the
+   *  echo in `runnerRequest` so a queued run survives a restart with the ask intact. */
+  runner?: RunnerId | 'auto';
   /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
    *  on `runner`. Unset = the project's own selection. Persisted on the record so the choice
    *  survives into resume and Continue, and so the thread can say which account did the work. */
@@ -1035,7 +1152,9 @@ const RESTART_CONTINUATION_PROMPT =
 interface PendingContinuation {
   stepId: string;
   sessionId: string | undefined;
-  backend: RunnerId;
+  /** The backend this continuation will open on — concrete, or `auto` when the follow-up
+   *  composer asked cezar to re-resolve (resolved inside `runContinuation` before any spawn). */
+  backend: RunnerId | 'auto';
   prompt: string;
   /** Attachments the user pasted into the follow-up composer — images to view, files (#950) to
    *  be given the path of. Persisted when the continuation actually opens, not here. */
@@ -1184,6 +1303,14 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly completeTrackerItem: ((root: string, provenance: NonNullable<RunRecord['automationTracker']>) => Promise<void>) | undefined;
 
+  /**
+   * The host's provider availability, as `core/provider-selection.ts` consumes it (spec
+   * 2026-10-12-auto-provider-selection). Injectable so the engine tests the launch/failover
+   * policy against a synthetic host; the default probes the real one through the process-wide
+   * auth + catalog singletons.
+   */
+  private readonly providerAvailability: () => Promise<ProviderAvailability>;
+
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
@@ -1205,12 +1332,15 @@ export class RunManager {
       /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
        *  check steps read it with the `checks` audience. */
       secrets?: SecretStore;
+      /** Provider availability for auto selection — tests inject a synthetic host. */
+      providerAvailability?: () => Promise<ProviderAvailability>;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
     this.completeTrackerItem = options.completeTrackerItem;
+    this.providerAvailability = options.providerAvailability ?? (() => this.hostProviderAvailability());
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
@@ -1430,7 +1560,11 @@ export class RunManager {
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
-      runner: input.runner,
+      // `auto` never reaches the record (spec Q2): the CONCRETE resolution lands on `runner`
+      // when `execute()` launches, and the request echo rides `runnerRequest` so a queued run
+      // re-derives the ask after a restart (see `reviveQueuedRun`).
+      runner: input.runner !== 'auto' ? input.runner : undefined,
+      runnerRequest: input.runner === 'auto' ? 'auto' : undefined,
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
@@ -1811,7 +1945,12 @@ export class RunManager {
       input: this.hydrateQueuedInput(run.id, {
         task: run.task,
         model: run.model,
-        runner: run.runner,
+        // Re-thread the auto request (spec 2026-10-12-auto-provider-selection): a queued run's
+        // `runner` is undefined until the launch resolves it, and `runnerRequest` is the durable
+        // copy of the ask — without this, a restart would silently turn an auto run into a
+        // default-runner run instead of re-deriving the decision the way auto-resume rebuilds
+        // its timers.
+        runner: run.runnerRequest === 'auto' ? 'auto' : run.runner,
         generateFollowups,
         // Re-thread autonomy (#489): the rebuilt input feeds `execute`, whose mid-run auto-nudge
         // reads `input.autonomous`. Without this a recovered autonomous run would run
@@ -2631,6 +2770,88 @@ export class RunManager {
     }
   }
 
+  // ---- auto provider selection (spec 2026-10-12-auto-provider-selection) --------------------
+
+  /**
+   * The default availability probe: the process-wide auth + catalog singletons, the workspace's
+   * provider enablement, and this store's own usage history. Never throws — every leg degrades
+   * (a failed status read drops that runner's row, a failed discovery reads as no catalog) so
+   * the resolver always gets an answer, and its own degradation path does the rest.
+   */
+  private async hostProviderAvailability(): Promise<ProviderAvailability> {
+    hostProviderAuth ??= new ProviderAuthService({ cwd: this.repoRoot });
+    hostModelCatalog ??= new RunnerModelCatalog({
+      adapters: {
+        claude: { discover: () => discoverClaudeModels({ cwd: this.repoRoot }) },
+        codex: { discover: () => discoverCodexModels({ cwd: this.repoRoot }) },
+        opencode: { discover: () => discoverOpencodeModels({ cwd: this.repoRoot }) },
+        junie: { discover: () => discoverJunieModels({ cwd: this.repoRoot }) },
+        cursor: { discover: () => discoverCursorModels() },
+      },
+    });
+    const [status, workspace] = await Promise.all([
+      hostProviderAuth.status().catch(() => undefined),
+      loadWorkspaceConfig().catch(() => null),
+    ]);
+    if (!status) return { runners: [], history: usageHistoryOf(this.store.listRuns()) };
+    const rows = applyProviderEnablement(status, workspace?.disabledProviders ?? []).providers;
+    const runners = await Promise.all(
+      rows.map(async (provider) => ({
+        provider,
+        catalog: await hostModelCatalog!.get(provider.provider).catch(() => undefined),
+      })),
+    );
+    return { runners, history: usageHistoryOf(this.store.listRuns()) };
+  }
+
+  /**
+   * The single server-side bridge to `resolveAutoSelection` (spec § Launch): called once on the
+   * initial launch of a run (or agent node, or continuation) whose request is `auto`, BEFORE
+   * anything spawns. Writes the resolution onto the record — the concrete `runner`, the
+   * `runnerRequest` echo, `resolvedModel` when a model was pinned — and one lifecycle line naming
+   * the pick. Returns the selection so the caller launches exactly what the record says.
+   *
+   * The `resources.autoProvider.enabled` switch lives HERE, at the seam, not in the resolver: a
+   * host with the feature off resolves every `auto` request to the configured default, which is
+   * byte-for-byte the pre-feature behavior for the launch (the record keeps the request echo,
+   * honestly labeled below).
+   */
+  private async resolveAutoRunner(
+    runId: string,
+    options: { locked: boolean; excludeProviders?: readonly string[] },
+  ): Promise<AutoSelection> {
+    const config = await loadConfig(this.repoRoot);
+    const autoProvider = this.semaphore.autoProvider();
+    let selection: AutoSelection;
+    if (!autoProvider.enabled) {
+      selection = { runner: config.defaultRunner, reason: 'no-provider' };
+    } else {
+      const availability = await this.providerAvailability().catch(() => undefined);
+      selection = resolveAutoSelection(availability, {
+        defaultRunner: config.defaultRunner,
+        locked: options.locked,
+        maxFailovers: autoProvider.maxFailovers,
+        excludeProviders: options.excludeProviders,
+      });
+    }
+    this.store.updateRun(runId, {
+      runner: selection.runner,
+      runnerRequest: 'auto',
+      // Unconditional: a re-resolution that pins no model clears the previous pin, so the
+      // record never claims a model the current provider was not asked for.
+      resolvedModel: selection.model,
+    });
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: !autoProvider.enabled
+        ? `auto: auto provider selection is switched off — using ${selection.runner}`
+        : selection.reason === 'no-provider'
+          ? `auto: nothing available — using default (${selection.runner})`
+          : autoPickLine('auto', selection),
+    });
+    return selection;
+  }
+
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
 
   /**
@@ -2650,10 +2871,23 @@ export class RunManager {
     if (run.archived) return;
     const limit = parseUsageLimit(run.error);
     if (!limit) return;
+    // Auto failover goes FIRST (spec 2026-10-12-auto-provider-selection, Q3): for a run that
+    // asked for `auto`, a reset hours out and a similar model on another provider, continuing NOW
+    // beats parking the task — the wait below remains the fallback when the gate declines or no
+    // candidate exists. The candidate probe is async, so this branch OWNS the wait: it arms the
+    // ordinary auto-resume itself when it declines (and re-checks every gate below on that path).
+    if (this.beginAutoFailover(run, limit)) return;
+    this.armUsageLimitResume(runId, limit);
+  }
+
+  /** The wait-for-reset half of the usage-limit path, after a (possible) failover declined. */
+  private armUsageLimitResume(runId: string, limit: UsageLimitHit): void {
     if (!this.semaphore.autoResumeOnUsageLimit()) return;
     // No session to resume = nothing this feature can do; `continueRun` would refuse anyway.
-    if (!run.steps.some((step) => step.sessionId)) return;
-    const attempts = run.autoResumeAttempts ?? 0;
+    const current = this.store.getRun(runId);
+    if (!current || current.status !== 'failed') return;
+    if (!current.steps.some((step) => step.sessionId)) return;
+    const attempts = current.autoResumeAttempts ?? 0;
     if (attempts >= MAX_AUTO_RESUMES) {
       this.store.appendEvent(runId, {
         type: 'note',
@@ -2667,6 +2901,86 @@ export class RunManager {
       type: 'lifecycle',
       message: `usage limit reached — resuming automatically at ${formatWakeInstant(wakeAt)}`,
     });
+  }
+
+  /**
+   * The sync half of the Q3 gate — record and config only, no probes. Every condition that can
+   * be answered without the host is answered here so the async half never fires for a run that
+   * would anyway wait: `auto` must be in effect, the feature on, the reset FURTHER than
+   * `maxWaitMinutes` (a near reset is cheaper to wait out than a fresh context re-reading the
+   * worktree), and the per-run hop budget unspent. True means the async half owns the wait.
+   */
+  private beginAutoFailover(run: RunRecord, limit: UsageLimitHit): boolean {
+    const autoProvider = this.semaphore.autoProvider();
+    if (!autoProvider.enabled) return false;
+    // Only a run that ASKED for auto fails over (spec: a task that named its provider keeps
+    // waiting for it — that is what the user chose).
+    if (run.runnerRequest !== 'auto') return false;
+    if ((run.failoverCount ?? 0) >= autoProvider.maxFailovers) return false;
+    if (limit.resetAt.getTime() - Date.now() <= autoProvider.maxWaitMinutes * 60_000) return false;
+    void this.settleAutoFailover(run.id, limit);
+    return true;
+  }
+
+  /**
+   * The async half of the failover: pick the nearest-tier candidate on a DIFFERENT canonical
+   * provider and hand the run to the ordinary continuation path with the runner/model override —
+   * the same point "run again on …" uses — so caps, holds and session rules all apply unchanged.
+   * No candidate, or a refused continuation, falls back to arming the ordinary wait: the run must
+   * never end up worse than the pre-feature behavior.
+   */
+  private async settleAutoFailover(runId: string, limit: UsageLimitHit): Promise<void> {
+    let run = this.store.getRun(runId);
+    if (!run || run.status !== 'failed') return; // continued/cancelled under us
+    const failed = failedCandidateOf(run);
+    const autoProvider = this.semaphore.autoProvider();
+    let selection: AutoSelection | null = null;
+    if (failed) {
+      const config = await loadConfig(this.repoRoot);
+      const availability = await this.providerAvailability().catch(() => undefined);
+      selection = pickFailoverSelection(failed, availability, {
+        defaultRunner: config.defaultRunner,
+        locked: agentModelsLocked(this.repoRoot),
+        maxFailovers: autoProvider.maxFailovers,
+        excludeProviders: run.excludedProviders,
+      });
+    }
+    if (!selection) {
+      this.armUsageLimitResume(runId, limit);
+      return;
+    }
+    // The failed provider joins the exclusion set for the rest of the run — the ping-pong guard:
+    // a later hop may not land back on the account that just died, whichever CLI fronts it.
+    const excluded = [...new Set([...(run.excludedProviders ?? []), failed!.provider.toLowerCase()])];
+    const failoverCount = (run.failoverCount ?? 0) + 1;
+    const resumed = this.continueRun(
+      runId,
+      { text: AUTO_FAILOVER_PROMPT, runner: selection.runner, model: selection.model ?? '' },
+      true,
+    );
+    if (!resumed.ok) {
+      // Refused before anything persisted — the run stays on its failed provider, so the ordinary
+      // wait applies. The refusal is named so the audit trail shows the hop that did not happen.
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `usage-limit failover could not start — ${resumed.error ?? 'unknown'}; waiting for the reset instead`,
+      });
+      this.armUsageLimitResume(runId, limit);
+      return;
+    }
+    this.store.updateRun(runId, {
+      failoverCount,
+      excludedProviders: excluded,
+      resolvedModel: selection.model,
+    });
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `usage limit until ${formatWakeInstant(limit.resetAt)} - failing over to ${
+        selection.model ? `${selection.runner}/${selection.model}` : selection.runner
+      }${selection.model ? ` (tier ${selection.candidate?.tier ?? modelCostTier(selection.model)})` : ' (runner default)'}`,
+    });
+    // A deferred continuation only ENQUEUES itself (the `fireAutoResume` rule) — this is its pump.
+    void this.pump();
   }
 
   /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it. */
@@ -3651,7 +3965,10 @@ export class RunManager {
     opts: {
       text?: string;
       images?: PastedContent[];
-      runner?: RunnerId;
+      /** The follow-up composer's runner override. `auto` re-resolves the choice at the
+       *  continuation's own launch (spec 2026-10-12-auto-provider-selection) — never persisted
+       *  as the run's runner; the resolution writes the concrete id. */
+      runner?: RunnerId | 'auto';
       model?: string;
       /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
        *  account the run is already on. */
@@ -3673,7 +3990,13 @@ export class RunManager {
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
     if (!sessionStep?.sessionId) return { ok: false, error: 'no agent session to resume' };
-    const targetRunner = opts.runner ?? run.runner ?? 'claude';
+    // `auto` cannot name its target here — the resolution happens inside `runContinuation`, at
+    // the continuation's own launch — so every synchronous decision below treats it as a runner
+    // SWITCH (no session resume, portable context instead). That is the conservative arm: a
+    // resolution landing back on the session's own provider pays a fresh context rather than
+    // risking `--resume` under a backend that does not own the session.
+    const requestedAuto = opts.runner === 'auto';
+    const targetRunner = (opts.runner !== 'auto' ? opts.runner : undefined) ?? run.runner ?? 'claude';
     // Session ids are provider-owned opaque values. New records carry explicit
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
@@ -3691,7 +4014,7 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = sessionBackend === targetRunner && !accountSwitched;
+    const resume = !requestedAuto && sessionBackend === targetRunner && !accountSwitched;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -3713,21 +4036,29 @@ export class RunManager {
       // `opus` would survive a switch to codex and `runContinuation` would hand it to the codex
       // runner. Clearing (not rejecting) is right — the pin belonged to the old backend and is
       // meaningless for the new one, which is exactly what the composer already displays (auto).
-      // Only a recognizably foreign preset is cleared; a free-form/custom id is left alone.
+      // Only a recognizably foreign preset is cleared; a free-form/custom id is left alone. An
+      // `auto` request clears UNCONDITIONALLY: whichever provider the launch resolves to, the
+      // old pin is a guess about the wrong backend, and `runContinuation` would fail the spawn
+      // on it (the #405 fail-loud gate) instead of letting the resolution pick the model.
       const inheritedPinIsForeign =
         opts.model === undefined &&
         run.model !== undefined &&
-        modelConflictsWithRunner(run.model, targetRunner);
+        (requestedAuto || modelConflictsWithRunner(run.model, targetRunner));
       // An account belongs to ONE agent, so a runner switch that names no account must not leave
       // the previous backend's login on the record. It is inert immediately (resolution applies
       // the run's account only to steps on the run's own runner) and wrong later, when a further
       // continuation switches back and inherits a login the user picked for a different task.
+      // `auto` clears for the same reason as the pin: the account belongs to whichever provider
+      // the launch resolves to, not to the one the run happens to be on.
       const inheritedAccountIsForeign =
         opts.agentProfile === undefined &&
         run.agentProfile !== undefined &&
-        targetRunner !== (run.runner ?? 'claude');
+        (requestedAuto || targetRunner !== (run.runner ?? 'claude'));
       this.store.updateRun(runId, {
-        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        // `auto` never reaches the record's runner (spec Q2) — the request rides `runnerRequest`
+        // and `runContinuation` writes the concrete resolution at its own launch.
+        ...(opts.runner !== undefined && opts.runner !== 'auto' ? { runner: opts.runner } : {}),
+        ...(requestedAuto ? { runnerRequest: 'auto' as const } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
           : inheritedPinIsForeign
@@ -3758,7 +4089,8 @@ export class RunManager {
       this.pendingContinuations.set(runId, {
         stepId,
         sessionId: resume ? sessionStep.sessionId : undefined,
-        backend: targetRunner,
+        // The RAW request, `auto` included — `runContinuation` resolves it at dequeue.
+        backend: opts.runner ?? run.runner ?? 'claude',
         prompt,
         images,
       });
@@ -3776,7 +4108,8 @@ export class RunManager {
       runId,
       stepId,
       resume ? sessionStep.sessionId : undefined,
-      targetRunner,
+      // The RAW request, `auto` included — resolved inside `runContinuation`.
+      opts.runner ?? run.runner ?? 'claude',
       prompt,
       images,
       undefined,
@@ -3795,7 +4128,7 @@ export class RunManager {
     runId: string,
     stepId: string,
     sessionId: string | undefined,
-    backend: RunnerId,
+    requestedBackend: RunnerId | 'auto',
     prompt: string,
     /** Attachments pasted into the follow-up composer — delivered with the
      *  reopened session's opening message, exactly like a live-session
@@ -3817,6 +4150,17 @@ export class RunManager {
     // for retention again — otherwise it keeps a dir on disk while staying
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+    // A follow-up composer's `auto` resolves HERE, at the continuation's own launch (spec
+    // 2026-10-12-auto-provider-selection): the bridge writes the concrete `runner` and the
+    // request echo on the record, and everything below — session pin, model identity, profile,
+    // spawn — sees one resolved backend. `continueRun` treated the request as a backend SWITCH
+    // for session affinity, so `sessionId` here is already undefined when it matters.
+    const backend = requestedBackend === 'auto'
+      ? (await this.resolveAutoRunner(runId, {
+          locked: agentModelsLocked(this.repoRoot),
+          excludeProviders: this.store.getRun(runId)?.excludedProviders,
+        })).runner
+      : requestedBackend;
     const record = this.store.getRun(runId);
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
@@ -4368,7 +4712,23 @@ export class RunManager {
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
-    const taskBackend: RunnerId = input.runner ?? config.defaultRunner;
+    // A task-level `auto` resolves ONCE, here, against live availability (spec
+    // 2026-10-12-auto-provider-selection § Launch): the concrete answer lands on the record
+    // (`runner` + the `runnerRequest` echo + `resolvedModel` + one lifecycle line) and REPLACES
+    // the request on the input everything downstream reads — no later spawn can act on an
+    // unresolved `auto`. Re-deriving on every dequeue is the point: a re-queued run re-asks the
+    // host, honoring `excludedProviders` from any failover hop this run already spent.
+    let taskBackend: RunnerId;
+    if (input.runner === 'auto') {
+      const selection = await this.resolveAutoRunner(runId, {
+        locked: agentModelsLocked(this.repoRoot),
+        excludeProviders: this.store.getRun(runId)?.excludedProviders,
+      });
+      taskBackend = selection.runner;
+      input = { ...input, runner: taskBackend, model: selection.model };
+    } else {
+      taskBackend = input.runner ?? config.defaultRunner;
+    }
     // The account may have gone into a usage-limit hold since this run was dequeued — the queue
     // gate cannot be the only one, because dequeue is not the moment of no return. Nothing has
     // happened yet here, so the run goes back to the queue untouched (spec
@@ -4822,7 +5182,24 @@ export class RunManager {
         if (rendered.prompt) rendered.prompt = renderNodeRefs(rendered.prompt, outputs);
         const verdicts = node.verdicts ?? [];
         if (verdicts.length) rendered.prompt = `${rendered.prompt ?? '{{task}}'}\n\n${verdictInstruction(verdicts)}`;
-        const backend = node.runner ?? taskBackend;
+        // A node-level `auto` resolves at NODE launch, on the same bridge a task-level request
+        // uses (spec 2026-10-12 § Intake surfaces). v1 steps arrive here too — `compileV1` keeps
+        // their `runner` verbatim on the compiled agent node — so this one site covers both. The
+        // resolved answer replaces the request on the RENDERED step, so the spawn below and the
+        // resume helpers above it all see one concrete backend; an author-pinned `model` on the
+        // node still wins over the resolution's (the pin is the louder choice).
+        let backend: RunnerId;
+        if (node.runner === 'auto') {
+          const selection = await this.resolveAutoRunner(runId, {
+            locked: agentModelsLocked(this.repoRoot),
+            excludeProviders: this.store.getRun(runId)?.excludedProviders,
+          });
+          backend = selection.runner;
+          rendered.runner = backend;
+          if (node.model === undefined && selection.model !== undefined) rendered.model = selection.model;
+        } else {
+          backend = node.runner ?? taskBackend;
+        }
         const lastTurn = { text: '' };
         const failure = await this.runAgentStep(
           runId,
@@ -5774,7 +6151,7 @@ export class RunManager {
     }
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
-    const backend = step.runner ?? taskBackend;
+    const backend = (step.runner !== 'auto' ? step.runner : undefined) ?? taskBackend;
     this.store.updateStep(runId, step.id, { sessionId, backend });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
@@ -6027,7 +6404,7 @@ export class RunManager {
       }
     };
 
-    const stepBackend = step.runner ?? taskBackend;
+    const stepBackend = (step.runner !== 'auto' ? step.runner : undefined) ?? taskBackend;
     // Normalise the selected model to canonical `provider/model` and back to the
     // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
     // unresolvable model (e.g. a bare id on opencode) returns the step error
