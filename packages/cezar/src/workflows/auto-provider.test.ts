@@ -3,18 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ProviderAvailability, RunnerAvailability } from '../core/provider-selection.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
-
-// Every test here boots the real engine over real `git init` + mock spawns; on a cold or loaded
-// disk the vitest defaults (10 s hooks) abort the SUITE, not the feature — the auto-resume suite
-// this is modeled on polls with 20–25 s for the same reason.
-vi.setConfig({ testTimeout: 90_000, hookTimeout: 60_000 });
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -68,10 +63,8 @@ describe('auto provider selection', () => {
     ['opencode', ['glm-4.6']],
   ]);
 
-  /** Poll until the predicate holds or the deadline passes — the engine writes are async, and a
-   *  settle here spans TWO mock spawns (the limit-hit turn, then the failover turn), which on a
-   *  loaded disk can take tens of seconds each; the deadline matches the file's testTimeout. */
-  async function waitFor(predicate: () => boolean, ms = 90_000): Promise<void> {
+  /** Poll until the predicate holds or the deadline passes — the engine writes are async. */
+  async function waitFor(predicate: () => boolean, ms = 60_000): Promise<void> {
     const deadline = Date.now() + ms;
     while (!predicate()) {
       if (Date.now() > deadline) throw new Error('engine state did not arrive in time');
@@ -88,6 +81,9 @@ describe('auto provider selection', () => {
   const lifecycleMessages = (runId: string): string[] =>
     store.readEvents(runId).filter((event) => event.type === 'lifecycle').map((event) => String(event.message ?? ''));
 
+  // Explicit 60s hook budget: the fixtures are real git repos, and this suite shares the host
+  // with whatever else the cockpit is running — the default 10s hook timeout is a machine-load
+  // lottery, not a property of the code under test (the same reason `it()` carries 30s+ below).
   beforeEach(async () => {
     savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
     savedEnv.CEZ_MOCK_LIMIT_RESET_SECONDS = process.env.CEZ_MOCK_LIMIT_RESET_SECONDS;
@@ -100,7 +96,7 @@ describe('auto provider selection', () => {
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-  });
+  }, 60_000);
 
   afterEach(async () => {
     let teardownError: unknown;
@@ -124,7 +120,7 @@ describe('auto provider selection', () => {
       else process.env[key] = value;
     }
     if (teardownError) throw teardownError;
-  });
+  }, 60_000);
 
   it('resolves an auto task at launch onto the cheapest usable provider and echoes the request', async () => {
     manager = new RunManager(store, repoRoot, {

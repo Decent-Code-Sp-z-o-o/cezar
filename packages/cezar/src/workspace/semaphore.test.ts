@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.ts';
+import { WorkspaceSemaphore, type SemaphoreParticipant, type WorkspaceResourceLimits } from './semaphore.ts';
 
 /** Unit surface of the shared workspace semaphore (spec 2026-07-20, step 2.5).
  *  The cross-manager scheduling behavior (cap across projects, the #347
@@ -86,6 +86,27 @@ describe('WorkspaceSemaphore', () => {
     const sem = new WorkspaceSemaphore({ initial: { maxParallel: 5, memoryLimitMb: 512 } });
     expect(sem.maxParallel()).toBe(5);
     expect(sem.memoryLimitMb()).toBe(512);
+  });
+
+  describe('autoProvider (spec 2026-10-12-auto-provider-selection Q6)', () => {
+    it('reads the shipped defaults when the key is absent (an older load stub)', () => {
+      const sem = new WorkspaceSemaphore({ initial: { maxParallel: 2 } });
+      expect(sem.autoProvider()).toEqual({ enabled: true, maxFailovers: 3, maxWaitMinutes: 10 });
+    });
+
+    it('serves a configured snapshot, and a refresh replaces it whole (the hot path)', async () => {
+      let limits: WorkspaceResourceLimits = {
+        maxParallel: 2,
+        memoryLimitMb: null,
+        autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 },
+      };
+      const sem = new WorkspaceSemaphore({ load: () => Promise.resolve(limits) });
+      await sem.refresh();
+      expect(sem.autoProvider().maxFailovers).toBe(3);
+      limits = { maxParallel: 2, memoryLimitMb: null, autoProvider: { enabled: false, maxFailovers: 0, maxWaitMinutes: 45 } };
+      await sem.refresh();
+      expect(sem.autoProvider()).toEqual({ enabled: false, maxFailovers: 0, maxWaitMinutes: 45 });
+    });
   });
 
   it('accountHolds() unions every participant by kind, and is empty for stubs that hold none', () => {

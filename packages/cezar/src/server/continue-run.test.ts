@@ -94,6 +94,12 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(captured?.opts.model).toBe('gpt-5.1-codex');
   });
 
+  it('accepts runner auto — the request rides verbatim for the continuation to resolve (spec 2026-10-12 Q2)', async () => {
+    const res = await post({ runner: 'auto' });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.runner).toBe('auto');
+  });
+
   it('an empty POST omits both — the run keeps its current backend (backward compat)', async () => {
     const res = await post({});
     expect(res.status).toBe(200);
