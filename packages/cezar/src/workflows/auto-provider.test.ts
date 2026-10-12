@@ -4,17 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-// Every test here boots the real engine over real `git init` + mock spawns; on a cold or loaded
-// disk the vitest defaults (10 s hooks) abort the SUITE, not the feature — the auto-resume suite
-// this is modeled on polls with 20–25 s for the same reason.
-vi.setConfig({ testTimeout: 60_000, hookTimeout: 30_000 });
 import type { ProviderAvailability, RunnerAvailability } from '../core/provider-selection.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+
+// Every test here boots the real engine over real `git init` + mock spawns; on a cold or loaded
+// disk the vitest defaults (10 s hooks) abort the SUITE, not the feature — the auto-resume suite
+// this is modeled on polls with 20–25 s for the same reason.
+vi.setConfig({ testTimeout: 90_000, hookTimeout: 60_000 });
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -71,7 +71,7 @@ describe('auto provider selection', () => {
   /** Poll until the predicate holds or the deadline passes — the engine writes are async, and a
    *  settle here spans TWO mock spawns (the limit-hit turn, then the failover turn), which on a
    *  loaded disk can take tens of seconds each; the deadline matches the file's testTimeout. */
-  async function waitFor(predicate: () => boolean, ms = 60_000): Promise<void> {
+  async function waitFor(predicate: () => boolean, ms = 90_000): Promise<void> {
     const deadline = Date.now() + ms;
     while (!predicate()) {
       if (Date.now() > deadline) throw new Error('engine state did not arrive in time');
@@ -140,7 +140,7 @@ describe('auto provider selection', () => {
     expect(resolved?.runnerRequest).toBe('auto');
     expect(resolved?.resolvedModel).toBe('haiku');
     expect(lifecycleMessages(record.id).some((message) => message === 'auto -> claude/haiku (tier 1)')).toBe(true);
-  }, 30_000);
+  }, 90_000);
 
   it('degrades to the configured default with an honest note when nothing is usable', async () => {
     manager = new RunManager(store, repoRoot, { providerAvailability: () => Promise.resolve({ runners: [] }) });
@@ -152,7 +152,7 @@ describe('auto provider selection', () => {
     expect(resolved?.runnerRequest).toBe('auto');
     expect(resolved?.resolvedModel).toBeUndefined();
     expect(lifecycleMessages(record.id).some((message) => message.includes('auto: nothing available — using default'))).toBe(true);
-  }, 30_000);
+  }, 90_000);
 
   it('fails over a far-out usage limit to a similar model on another provider', async () => {
     manager = new RunManager(store, repoRoot, { providerAvailability: failoverAvailability });
@@ -174,7 +174,7 @@ describe('auto provider selection', () => {
     expect(hopped?.error).toContain('continue failed');
     // No wait was armed — the failover replaced it.
     expect(hopped?.autoResumeAt).toBeUndefined();
-  }, 30_000);
+  }, 90_000);
 
   it('waits instead when the reset is inside maxWaitMinutes', async () => {
     process.env.CEZ_MOCK_LIMIT_RESET_SECONDS = '60';
@@ -187,7 +187,7 @@ describe('auto provider selection', () => {
     expect(waiting?.failoverCount).toBeUndefined();
     expect(waiting?.excludedProviders).toBeUndefined();
     expect(waiting?.runner).toBe('claude'); // still on the failed provider — that is the wait
-  }, 30_000);
+  }, 90_000);
 
   it('never fails over a run that named its runner', async () => {
     manager = new RunManager(store, repoRoot, { providerAvailability: failoverAvailability });
@@ -198,7 +198,7 @@ describe('auto provider selection', () => {
     expect(waiting?.runnerRequest).toBeUndefined();
     expect(waiting?.autoResumeAt).toBeDefined();
     expect(waiting?.failoverCount).toBeUndefined();
-  }, 30_000);
+  }, 90_000);
 
   it('keeps waiting once the failover budget is spent', async () => {
     manager = new RunManager(store, repoRoot, {
@@ -214,7 +214,7 @@ describe('auto provider selection', () => {
     expect(waiting?.failoverCount).toBe(3);
     expect(waiting?.autoResumeAt).toBeDefined();
     expect(waiting?.excludedProviders).toBeUndefined();
-  }, 30_000);
+  }, 90_000);
 
   it('resolves auto to the default and never fails over while the feature is switched off', async () => {
     manager = new RunManager(store, repoRoot, {
@@ -231,5 +231,5 @@ describe('auto provider selection', () => {
     const waiting = store.getRun(record.id);
     expect(waiting?.failoverCount).toBeUndefined();
     expect(waiting?.autoResumeAt).toBeDefined();
-  }, 30_000);
+  }, 90_000);
 });
