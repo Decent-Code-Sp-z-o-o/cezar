@@ -37,6 +37,9 @@ describe('the automations prompt part', () => {
 describe('the definition reference', () => {
   it('names every supported runner as a standalone token', () => {
     for (const runner of RUNNER_IDS) expect(containsRunnerToken(AUTOMATION_SCHEMA_REFERENCE, runner)).toBe(true);
+    // `auto` is an intake value of its own (spec 2026-10-12-auto-provider-selection): the
+    // definition carries the request verbatim and the server resolves it at launch.
+    expect(containsRunnerToken(AUTOMATION_SCHEMA_REFERENCE, 'auto')).toBe(true);
   });
 
   it('names every event the storage schema accepts, and no other', () => {

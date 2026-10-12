@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { runnerSchema } from './health.ts';
+import { runnerRequestSchema, runnerSchema } from './health.ts';
 
 /**
  * The DISPATCH family of `/api/v1`: a task may dispatch other tasks (spec
@@ -149,8 +149,10 @@ export const dispatchInputSchema = z
     success_criteria: z.string().max(1000).optional(),
     required_evidence: z.string().max(1000).optional(),
     retry_limit: z.number().int().min(0).max(3).optional(),
-    /** The child's backend and model. Absent = the parent's. */
-    runner: runnerSchema.optional(),
+    /** The child's backend and model. Absent = the parent's. `auto` asks cezar to pick the
+     *  cheapest capable provider at the CHILD's own launch (spec Q8: children inherit the
+     *  request, never the parent's resolution). */
+    runner: runnerRequestSchema.optional(),
     model: z.string().max(200).optional(),
   })
   .strict();

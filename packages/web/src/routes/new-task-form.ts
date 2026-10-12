@@ -40,6 +40,26 @@ export function pushRecentSource(
   return [source, ...rest].slice(0, cap)
 }
 
+/**
+ * The composer's runner union: the contract's concrete runners plus `auto` (spec
+ * 2026-10-12-auto-provider-selection, Q2). `auto` is an intake-only REQUEST — cezar resolves it
+ * to a concrete runner + model at launch, and `CreateRunInput.runner` carries it verbatim —
+ * while `runnerSchema` stays the concrete identity, so `Runner` alone cannot name the request
+ * and this union stays.
+ */
+export type ComposerRunner = Runner | 'auto'
+
+/** The Auto card that LEADS the composer's runner picker (spec § UI/UX). `id: 'auto'` names no
+ *  backend, which is why it does not join `RUNNERS` below — and why it is its own `as const`
+ *  row rather than a `RunnerOption`: every other reader of that catalog — the Settings
+ *  default-runner pickers, hand-to-agent, the Dispatch subtask engine, the stored dispatch-intent
+ *  guard — names a runner that must exist on the host, and `auto` is not one. */
+export const AUTO_RUNNER = {
+  id: 'auto',
+  label: 'auto',
+  desc: 'Cheapest capable provider, chosen at launch; fails over if the provider runs out',
+} as const
+
 export interface RunnerOption {
   id: Runner
   label: string
@@ -64,6 +84,11 @@ export interface ModelPreset {
   desc: string
 }
 
+/** The model picker's collapsed row under the Auto runner (spec § UI/UX): one non-interactive
+ *  line, because no model can be pinned when no runner is named — the launch resolves both
+ *  together. */
+export const AUTO_MODEL_ROW = 'Model is chosen at launch, per availability'
+
 /**
  * Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner decides.
  *
@@ -75,7 +100,10 @@ export interface ModelPreset {
  * resolves them itself; Codex, OpenCode and Cursor list `auto` alone. pi has no host catalog yet, so its
  * entries are the real picker contents rather than a fallback.
  */
-export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
+export const MODELS_BY_RUNNER: Record<ComposerRunner, readonly ModelPreset[]> = {
+  // The Auto runner has no presets to offer — its single row IS the collapse above, and
+  // `modelsForRunner` returns it without consulting any catalog or custom id.
+  auto: [{ id: '', label: 'auto', desc: AUTO_MODEL_ROW }],
   claude: [
     { id: '', label: 'auto', desc: 'Pick the best model per step' },
     { id: 'opus', label: 'opus', desc: 'Deep reasoning for hard tasks' },
@@ -143,9 +171,11 @@ const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
 
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
  * (#480).
- * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
-export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
-  if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
+ * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded.
+ * `auto` names no model of its own — an empty model is auto WITHIN a runner and `auto` the
+ * runner is the launch's decision — so neither can contradict anything. */
+export function modelConflictsWithRunner(model: string, runner: ComposerRunner): boolean {
+  if (!model || runner === 'auto' || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false
   return Object.entries(MODELS_BY_RUNNER).some(
     ([other, presets]) =>
@@ -158,10 +188,14 @@ export function modelConflictsWithRunner(model: string, runner: Runner): boolean
 }
 
 export function modelsForRunner(
-  runner: Runner,
+  runner: ComposerRunner,
   catalog?: RunnerModelCatalogResponse,
   customIds: readonly (string | null | undefined)[] = [],
 ): readonly ModelPreset[] {
+  // The Auto runner's picker is exactly its one row: no catalog is interrogated (there is no
+  // runner to interrogate) and no custom id is kept representable — a model pinned on another
+  // runner must not survive as a silent pin on a launch that picks its own.
+  if (runner === 'auto') return MODELS_BY_RUNNER.auto
   const presets = MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude
   const discovered = runnerDiscoversModels(runner) ? (catalog?.models ?? []) : []
   // A live catalog REPLACES the presets rather than extending them: the whole point is that the
@@ -204,11 +238,12 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
 }
 
 export function modelCatalogStatus(
-  runner: Runner,
+  runner: ComposerRunner,
   catalog?: RunnerModelCatalogResponse,
   failed = false,
 ): string | undefined {
-  if (!runnerDiscoversModels(runner)) return undefined
+  // `auto` fetches no catalog — the picker under it is collapsed, so there is no state to report.
+  if (runner === 'auto' || !runnerDiscoversModels(runner)) return undefined
   const name = DISCOVERY_RUNNER_LABEL[runner]
   if (catalog?.stale) return `Using cached ${name} model list`
   if (failed || catalog?.source === 'unavailable') return `Latest ${name} models unavailable`
@@ -238,12 +273,14 @@ export function resolveRunner(
 }
 
 /** The runner field shared by every NEW-run surface. Explicit/sticky intent always rides the
- * request; only an untouched pick matching the active project's known default may be omitted. */
-export function runnerOverride(
-  runner: Runner,
+ * request; only an untouched pick matching the active project's known default may be omitted.
+ * Generic on the caller's union — `auto` included, which the contract's body type takes as the
+ * request it is and resolves at launch. */
+export function runnerOverride<T extends ComposerRunner>(
+  runner: T,
   defaultRunner: Runner | undefined,
   explicit = false,
-): Runner | undefined {
+): T | undefined {
   return !explicit && runner === defaultRunner ? undefined : runner
 }
 
@@ -255,13 +292,14 @@ export function runnerOverride(
  *  auto — here what is displayed is what is sent. */
 export function resolveModel(
   picked: string | null,
-  runner: Runner,
+  runner: ComposerRunner,
   defaults?: Partial<Record<Runner, string>>,
   catalog?: RunnerModelCatalogResponse,
 ): string {
-  const models = modelsForRunner(runner, catalog, [picked, defaults?.[runner]])
+  const runnerDefault = runner === 'auto' ? undefined : defaults?.[runner]
+  const models = modelsForRunner(runner, catalog, [picked, runnerDefault])
   if (picked !== null && models.some((m) => m.id === picked)) return picked
-  const preset = defaults?.[runner]
+  const preset = runnerDefault
   if (preset !== undefined && models.some((m) => m.id === preset)) return preset
   return ''
 }
@@ -323,7 +361,7 @@ export function buildCreateRunBody(opts: {
   model: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
-  runner: Runner
+  runner: ComposerRunner
   /** True when the draft contains a sticky/user runner choice rather than an untouched default. */
   runnerExplicit?: boolean
   defaultRunner?: Runner
@@ -373,6 +411,9 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
+    // The runner request rides verbatim — `auto` included, resolved by the server at launch
+    // (spec 2026-10-12-auto-provider-selection, Q2), never here. `CreateRunInput.runner` is the
+    // contract's request schema (concrete + `'auto'`), so no cast.
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.

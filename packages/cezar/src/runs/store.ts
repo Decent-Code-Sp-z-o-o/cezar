@@ -182,6 +182,23 @@ export const runRecordSchema = z.object({
   /** Agent backend this run used — drives "open in CLI" resume command. `storedRunnerSchema`
    *  so a legacy `claude-cli` record folds to `claude` instead of failing the whole index (#547). */
   runner: storedRunnerSchema.optional(),
+  /**
+   * The run ASKED for `auto` (spec 2026-10-12-auto-provider-selection): the request echo, the
+   * literal `'auto'` — never a runner id. `runner` above carries the concrete resolution (the
+   * launch resolves before anything spawns, and a usage-limit failover may switch it mid-run).
+   * `.catch(undefined)` like `autoResumeAt`: runs.json is hand-editable JSON, and junk in this
+   * key must degrade to "no request" rather than drop the whole record from the index.
+   * Absent on every legacy record — that is the unchanged-parse guarantee.
+   */
+  runnerRequest: z.literal('auto').optional().catch(undefined),
+  /** Failover hops already spent on this run (spec § failover); absent (and 0) until the first. */
+  failoverCount: z.number().int().min(0).optional().catch(undefined),
+  /** Canonical providers exhausted on this run — grows monotonically per hop (the ping-pong
+   *  guard). Absent until the first usage-limit failover. */
+  excludedProviders: z.array(z.string()).optional().catch(undefined),
+  /** The model auto pinned at the last resolution, when cezar chose one (locked mode and
+   *  native-default picks send no model flag and leave this absent). */
+  resolvedModel: z.string().optional(),
   /** Per-task agent-account override from the composer (spec 2026-07-29-agent-profiles), applying
    *  to steps that run on `runner`. Steps on a DIFFERENT backend still resolve from the project's
    *  own selection — an override for Claude says nothing about which Codex account a mixed
@@ -1035,6 +1052,10 @@ export class RunStore extends EventEmitter {
     task: string;
     model?: string;
     runner?: RunnerId;
+    /** The run requested `auto` (spec 2026-10-12-auto-provider-selection) — the request echo
+     *  persisted at creation so a queued run survives a restart and the thread can show request
+     *  and resolution as two different things. `runner` stays the CONCRETE resolution. */
+    runnerRequest?: 'auto';
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
     generateFollowups?: boolean;
@@ -1057,6 +1078,7 @@ export class RunStore extends EventEmitter {
       task: input.task,
       model: input.model,
       runner: input.runner,
+      runnerRequest: input.runnerRequest,
       agentProfile: input.agentProfile,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,

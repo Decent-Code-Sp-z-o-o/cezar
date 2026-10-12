@@ -100,6 +100,25 @@ describe('cez task', () => {
     const h = harness({ status: 200, body: {} });
     expect(await runTaskCommand(['help'], {}, h.io)).toBe(0);
     for (const runner of RUNNER_IDS) expect(containsRunnerToken(h.out[0] ?? '', runner)).toBe(true);
+    // `auto` is an intake value of its own (spec 2026-10-12-auto-provider-selection): advertised
+    // next to the concrete runners, with what cezar does with it.
+    expect(containsRunnerToken(h.out[0] ?? '', 'auto')).toBe(true);
+    expect(h.out[0]).toContain('cheapest capable provider at launch');
+    expect(h.out[0]).toContain('fails over');
+  });
+
+  it('create stores a --runner auto request verbatim for the server to resolve at launch', async () => {
+    const h = harness({ status: 201, body: { id: 'child-2' } });
+    const code = await runTaskCommand(['create', 'Triage the flaky tests', '--runner', 'auto'], env, h.io);
+    expect(code).toBe(0);
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({ objective: 'Triage the flaky tests', runner: 'auto' });
+  });
+
+  it('refuses a runner the intake does not accept before anything is posted', async () => {
+    const h = harness({ status: 201, body: { id: 'child-3' } });
+    expect(await runTaskCommand(['create', 'x', '--runner', 'browser'], env, h.io)).toBe(1);
+    expect(h.err[0]).toContain(`--runner must be one of ${[...RUNNER_IDS, 'auto'].join(', ')}`);
+    expect(h.calls).toHaveLength(0);
   });
 
   it('list prints the tree this task belongs to, indented, with status, cost and verdicts', async () => {

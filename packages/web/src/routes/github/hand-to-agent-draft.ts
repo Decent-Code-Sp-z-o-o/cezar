@@ -31,9 +31,11 @@ export interface FollowupSelection {
    * (`resolveModel`, new-task-form.ts).
    *
    * `null` therefore keeps meaning "never touched", and an explicit auto pick is `model: ''`.
-   * Collapsing the two is the bug, not a tidy-up: `''` must round-trip as `''`.
+   * Collapsing the two is the bug, not a tidy-up: `''` must round-trip as `''`. The runner
+   * request `auto` (spec 2026-10-12-auto-provider-selection) is a valid remembered way of
+   * working too — it names no backend, so no host state can invalidate it.
    */
-  runner: Runner | null
+  runner: Runner | 'auto' | null
   model: string | null
 }
 
@@ -53,7 +55,12 @@ function normalizeSelection(raw: unknown): FollowupSelection {
     skills: Array.isArray(obj.skills) ? obj.skills.filter((s): s is string => typeof s === 'string') : [],
     // A runner this build does not know (an older/newer cezar, or a hand-edited value) is not a
     // runner — the pill would render nothing selectable and the POST would name a dead backend.
-    runner: KNOWN_RUNNERS.includes(obj.runner as Runner) ? (obj.runner as Runner) : null,
+    // `auto` is the exception: it names no backend, so the launch always has an answer for it.
+    runner: KNOWN_RUNNERS.includes(obj.runner as Runner)
+      ? (obj.runner as Runner)
+      : obj.runner === 'auto'
+        ? 'auto'
+        : null,
     model: typeof obj.model === 'string' ? obj.model : null,
   }
 }

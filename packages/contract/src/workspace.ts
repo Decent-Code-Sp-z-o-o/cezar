@@ -51,6 +51,13 @@ export const workspaceConfigResponseSchema = z.object({
     monitoringWakeIntervalMinutes: z.number().nullable(),
     /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
     autoResumeOnUsageLimit: z.boolean(),
+    /** Auto provider selection (spec 2026-10-12-auto-provider-selection Q6), always resolved —
+     *  the echo materializes the schema defaults on every answer like every other key here. */
+    autoProvider: z.object({
+      enabled: z.boolean(),
+      maxFailovers: z.number(),
+      maxWaitMinutes: z.number(),
+    }),
     memoryLimitMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
   }),
@@ -122,6 +129,15 @@ export const setWorkspaceConfigInputSchema = z.object({
       idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
       autoResumeOnUsageLimit: z.boolean().optional(),
+      /** Auto provider selection (spec 2026-10-12-auto-provider-selection Q6). Partial: keys
+       *  absent from the patch keep their current value. */
+      autoProvider: z
+        .object({
+          enabled: z.boolean().optional(),
+          maxFailovers: z.number().int().min(0).max(10).optional(),
+          maxWaitMinutes: z.number().int().min(0).max(1440).optional(),
+        })
+        .optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
     })

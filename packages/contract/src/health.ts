@@ -4,6 +4,18 @@ import { z } from 'zod';
 export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
 export type Runner = z.infer<typeof runnerSchema>;
 
+/**
+ * The runner a caller may REQUEST: the concrete backends, or `auto` — cezar picks the cheapest
+ * capable provider at launch and fails over on exhaustion (spec
+ * `.ai/specs/2026-10-12-auto-provider-selection.md` Q2). Deliberately beside — never inside —
+ * {@link runnerSchema}: `auto` is an intake value that the server resolves to a concrete runner
+ * BEFORE anything launches, so it never joins the runner identity a record, a session or a
+ * persisted step carries. Used only where a request body (run creation, dispatch child orders,
+ * workflow step/node authoring) or the echo of one (automation definitions) names the choice.
+ */
+export const runnerRequestSchema = z.enum([...runnerSchema.options, 'auto']);
+export type RunnerRequest = z.infer<typeof runnerRequestSchema>;
+
 /** Git facts about the project root, or `null` when it is not a repository. */
 export const repoInfoSchema = z.object({
   root: z.string(),

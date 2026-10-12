@@ -122,6 +122,23 @@ const resourcesSchema = z
      * it off leaves the run `failed` with its Continue button, exactly as before the feature.
      */
     autoResumeOnUsageLimit: z.boolean().default(true).catch(true),
+    /**
+     * Auto provider selection (spec 2026-10-12-auto-provider-selection, Q6): `runner: 'auto'`
+     * resolves to the cheapest capable provider at launch and fails over to a similar model on a
+     * different provider when that one's usage window closes far out. Same home as
+     * `autoResumeOnUsageLimit` for the same reason — the exhaustion belongs to the account, not
+     * the repo. `enabled: false` turns the whole feature off without touching any task
+     * definition; `maxFailovers` bounds hops per run (0 = never fail over); `maxWaitMinutes` is
+     * the Q3 near-reset window inside which waiting beats spending a fresh context.
+     */
+    autoProvider: z
+      .object({
+        enabled: z.boolean().default(true).catch(true),
+        maxFailovers: z.number().int().min(0).max(10).default(3).catch(3),
+        maxWaitMinutes: z.number().int().min(0).max(1440).default(10).catch(10),
+      })
+      .prefault(() => ({}))
+      .catch(() => ({ enabled: true, maxFailovers: 3, maxWaitMinutes: 10 })),
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),

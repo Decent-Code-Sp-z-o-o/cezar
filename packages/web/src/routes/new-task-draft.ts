@@ -5,7 +5,7 @@ import {
   type Runner,
 } from '@open-mercato/cezar-api-client'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
-import { RUNNERS, type TaskSource } from './new-task-form'
+import { RUNNERS, type ComposerRunner, type TaskSource } from './new-task-form'
 
 /**
  * The new-task draft store (spec: "Queued form state survives navigation (draft store)").
@@ -22,7 +22,9 @@ import { RUNNERS, type TaskSource } from './new-task-form'
 export interface NewTaskDraft {
   text: string
   source: TaskSource | null
-  runner: Runner | null
+  /** The composer's runner pick — the concrete runners plus the `auto` request (spec
+   *  2026-10-12-auto-provider-selection), which is sticky like the rest of the pill row. */
+  runner: ComposerRunner | null
   /** Per-task agent account (spec 2026-07-29-agent-profiles). `null` = follow the project's own
    *  selection, which is what every draft that never touched the control means. Sticky like the
    *  other pickers — which login a repo's work runs under is a way of working, not a whim. */
@@ -158,7 +160,9 @@ function normalize(raw: unknown): NewTaskDraft {
   return {
     text: typeof obj.text === 'string' ? obj.text : '',
     source: isSource(obj.source) ? obj.source : null,
-    runner: typeof obj.runner === 'string' ? (obj.runner as Runner) : null,
+    // Anything string-shaped is kept — the pickers resolve an unknown or retired id the same way
+    // they always did (an explicit fallback), so this cast stays as loose as it was.
+    runner: typeof obj.runner === 'string' ? (obj.runner as ComposerRunner) : null,
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     model: typeof obj.model === 'string' ? obj.model : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
