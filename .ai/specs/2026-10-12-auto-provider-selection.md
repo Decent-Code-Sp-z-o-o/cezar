@@ -76,7 +76,7 @@ resolveAutoSelection(availability, options): AutoSelection
 pickFailoverSelection(failed: ProviderCandidate, availability, options): AutoSelection | null
 ```
 
-- **`MODEL_COST_TIERS`** — ordered matchers over model-id shapes (`haiku|mini|flash|low → 1`, `sonnet|codex(?!-mini)|medium → 2`, `opus|gpt-5(\D|$)|high → 3`, `max|ultra → 4`, unmatched → 3). Structural shapes, not dated ids — the same discipline as `NATIVE_MODEL_ID_PREFIX`. Exported for tests.
+- **`MODEL_COST_TIERS`** — ordered matchers over model-id shapes (`haiku|mini|flash|low → 1`, `sonnet|codex(?!-mini)|medium → 2`, `opus|gpt-5(\D|$)|high → 3`, `max|ultra → 4`, unmatched → 3). Structural shapes, not dated ids — the same discipline as `NATIVE_MODEL_ID_PREFIX`. Each family matches only at a **segment boundary** (`(?<![a-z0-9])…`): the tokens are segments of an id, not substrings, so the "mini" inside `gemini-…` must never rank tier 1. Exported for tests.
 - **Ranking** — lowest tier wins; ties break by measured `meanTokens` ascending (when both have it), then `RUNNER_IDS` order, then id. Deterministic, no randomness.
 - **Candidate enumeration** — for each runner with usable auth: catalog models when discovery has them, else the runner's own static presets (`KNOWN_PRESETS_BY_RUNNER` / the composer's fallback lists), else the single unrated native default (tier 0 — "the runner's own default is always a candidate", which is what keeps `codex` and `junie` — whose catalogs may be empty — in the running without cezar inventing ids).
 - **`locked`** — candidates collapse to one per runner: the runner's native default, model never sent on the wire.
