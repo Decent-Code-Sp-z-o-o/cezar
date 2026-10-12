@@ -3605,8 +3605,10 @@ export class RunManager {
    *  On a run already resting at `review` (no session — the engine loop is
    *  over), "Finish" is the third review exit: accept the changes without a
    *  PR and flip straight to `done`. */
-  /** Async since the tracker completion write-back joined the review-accepted settle. */
-  async finish(runId: string): Promise<boolean> {
+  /** Sync on purpose: the tracker completion write-back that joined the review-accepted
+   *  settle is best-effort (it logs failures, never settles them into the run), so it
+   *  fires detached instead of making every caller await a Promise. */
+  finish(runId: string): boolean {
     const state = this.active.get(runId);
     if (state?.graphFinish && !state.session?.open) {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user at a workflow wait' });
@@ -3632,7 +3634,7 @@ export class RunManager {
     if (run?.status === 'review' && !this.isActive(runId)) {
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
-      await this.settleTrackerCompletion(runId);
+      void this.settleTrackerCompletion(runId);
       return true;
     }
     return false;
