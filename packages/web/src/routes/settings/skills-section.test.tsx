@@ -30,6 +30,7 @@ function serve(overrides: Partial<WorkspaceConfigResponse> = {}) {
       idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
+      autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 },
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
     },

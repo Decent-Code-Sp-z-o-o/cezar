@@ -43,10 +43,9 @@ export function pushRecentSource(
 /**
  * The composer's runner union: the contract's concrete runners plus `auto` (spec
  * 2026-10-12-auto-provider-selection, Q2). `auto` is an intake-only REQUEST — cezar resolves it
- * to a concrete runner + model at launch — so it deliberately stays OUT of the contract's
- * `runnerSchema`: `RUNNER_IDS` remains the concrete runners and persisted records never carry
- * it. The contract has not absorbed the request yet, so this is a LOCAL widening; when the
- * server-side intake schema takes `'auto'`, collapse this back to `Runner`.
+ * to a concrete runner + model at launch, and `CreateRunInput.runner` carries it verbatim —
+ * while `runnerSchema` stays the concrete identity, so `Runner` alone cannot name the request
+ * and this union stays.
  */
 export type ComposerRunner = Runner | 'auto'
 
@@ -275,8 +274,8 @@ export function resolveRunner(
 
 /** The runner field shared by every NEW-run surface. Explicit/sticky intent always rides the
  * request; only an untouched pick matching the active project's known default may be omitted.
- * Generic on the caller's union: a surface that never picks `auto` keeps the concrete
- * `Runner | undefined` return the contract's body type asks for. */
+ * Generic on the caller's union — `auto` included, which the contract's body type takes as the
+ * request it is and resolves at launch. */
 export function runnerOverride<T extends ComposerRunner>(
   runner: T,
   defaultRunner: Runner | undefined,
@@ -413,11 +412,9 @@ export function buildCreateRunBody(opts: {
       : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
     // The runner request rides verbatim — `auto` included, resolved by the server at launch
-    // (spec 2026-10-12-auto-provider-selection, Q2), never here. The contract's `CreateRunInput`
-    // has not absorbed the request yet — its `runner` is still the concrete schema — so the
-    // widened value is cast; the cast (and `ComposerRunner` with it) goes once the contract
-    // takes `'auto'`.
-    runner: runnerOverride(runner, defaultRunner, runnerExplicit) as Runner | undefined,
+    // (spec 2026-10-12-auto-provider-selection, Q2), never here. `CreateRunInput.runner` is the
+    // contract's request schema (concrete + `'auto'`), so no cast.
+    runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.
     agentProfile: agentProfile || undefined,

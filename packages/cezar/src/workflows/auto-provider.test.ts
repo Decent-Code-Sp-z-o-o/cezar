@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Every test here boots the real engine over real `git init` + mock spawns; on a cold or loaded
+// disk the vitest defaults (10 s hooks) abort the SUITE, not the feature — the auto-resume suite
+// this is modeled on polls with 20–25 s for the same reason.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 30_000 });
 import type { ProviderAvailability, RunnerAvailability } from '../core/provider-selection.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
@@ -63,8 +68,10 @@ describe('auto provider selection', () => {
     ['opencode', ['glm-4.6']],
   ]);
 
-  /** Poll until the predicate holds or the deadline passes — the engine writes are async. */
-  async function waitFor(predicate: () => boolean, ms = 20_000): Promise<void> {
+  /** Poll until the predicate holds or the deadline passes — the engine writes are async, and a
+   *  settle here spans TWO mock spawns (the limit-hit turn, then the failover turn), which on a
+   *  loaded disk can take tens of seconds each; the deadline matches the file's testTimeout. */
+  async function waitFor(predicate: () => boolean, ms = 60_000): Promise<void> {
     const deadline = Date.now() + ms;
     while (!predicate()) {
       if (Date.now() > deadline) throw new Error('engine state did not arrive in time');

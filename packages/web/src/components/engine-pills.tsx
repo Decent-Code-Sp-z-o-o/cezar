@@ -30,9 +30,11 @@ import { readFollowupSelection, writeFollowupSelection } from '@/routes/github/h
  * needs, so the pick and the thing sent to the server can never disagree.
  */
 
-/** What the user actually touched. `null` on any field means "never touched". */
+/** What the user actually touched. `null` on any field means "never touched". `auto` is the
+ *  runner REQUEST (spec 2026-10-12-auto-provider-selection): it rides the POST verbatim and the
+ *  launch resolves it — these pills never narrow it client-side. */
 export interface EnginePick {
-  runner: Runner | null
+  runner: Runner | 'auto' | null
   model: string | null
   /**
    * Which login of that agent runs it (spec 2026-07-29-agent-profiles). Three states, and the
@@ -44,9 +46,10 @@ export interface EnginePick {
   account: string | null
 }
 
-/** The effective backend, plus what the body rules need to decide what to send. */
+/** The effective backend, plus what the body rules need to decide what to send. `auto` passes
+ *  through unresolved — it is a request, not a backend this host names. */
 export interface ResolvedEngine {
-  runner: Runner
+  runner: Runner | 'auto'
   /** A sticky/user pick must ride the request even when it currently equals the default. */
   runnerExplicit: boolean
   model: string
@@ -76,9 +79,13 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   // `/api/health` is deliberately boot-project-only. Runner policy is per project, so every
   // scoped start surface must read the active project's `/api/config` instead (#699).
   const defaultRunner = config.data?.defaultRunner
-  const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
+  // `auto` stays `auto` — the launch resolves it (spec 2026-10-12-auto-provider-selection, Q2);
+  // only a concrete pick resolves against the host's runners.
+  const runner = pick.runner === 'auto' ? 'auto' : resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
   // Resolved first: each runner has its own host catalog (#794), so the fetch follows the pick.
-  const catalog = useRunnerModels(runner)
+  // Under `auto` there is nothing to fetch — the model pill is the launch-resolved row.
+  const catalogRunner: Runner = runner === 'auto' ? (defaultRunner ?? runners[0] ?? 'claude') : runner
+  const catalog = useRunnerModels(catalogRunner, runner !== 'auto')
   const modelsLocked = config.data?.modelsLocked === true
   // Agent accounts (spec 2026-07-29-agent-profiles), read through the shared hook the /new composer
   // and the thread's Continue read, so no start surface can disagree about which login runs.
@@ -175,9 +182,12 @@ function useEnginePickValidity(pick: EnginePick, onChange: (pick: EnginePick) =>
   const providers = useProviderStatus()
   const config = useConfig()
   const runners = usableRunners(providers.data)
-  const runner = resolveRunner(pick.runner, runners, config.data?.defaultRunner ?? runners[0] ?? 'claude')
+  const runner = pick.runner === 'auto' ? 'auto' : resolveRunner(pick.runner, runners, config.data?.defaultRunner ?? runners[0] ?? 'claude')
   const loaded = providers.isSuccess && runners.length > 0
-  const runnerGone = loaded && pick.runner !== null && !runners.includes(pick.runner)
+  // `auto` names no backend, so no host state can invalidate it — the launch resolves or
+  // degrades; only a concrete pick can be "gone".
+  const runnerGone =
+    loaded && pick.runner !== null && pick.runner !== 'auto' && !runners.includes(pick.runner)
   const modelWrong = loaded && pick.model !== null && modelConflictsWithRunner(pick.model, runner)
   useEffect(() => {
     if (!runnerGone && !modelWrong) return
@@ -256,8 +266,14 @@ export function EnginePills({
   const resolved = useResolvedEngine(pick)
   const { runner, model, runners, canRun, modelsLocked } = resolved
   const config = useConfig()
-  const catalog = useRunnerModels(runner)
-  const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
+  // Under `auto` no catalog is fetched — the model pill is the launch-resolved row.
+  const catalogRunner: Runner = runner === 'auto' ? (resolved.defaultRunner ?? runners[0] ?? 'claude') : runner
+  const catalog = useRunnerModels(catalogRunner, runner !== 'auto')
+  const models = modelsForRunner(
+    runner,
+    catalog.data,
+    [pick.model, runner === 'auto' ? undefined : config.data?.defaultModels?.[runner]],
+  )
   const unavailable = disabled || !canRun
   const accountChoices = accounts ? resolved.accounts : []
   // Shown when there is a choice to make: more than one runner, or — where accounts are offered —
@@ -275,19 +291,27 @@ export function EnginePills({
           account={accounts ? resolved.account : null}
           repoAccount={accounts ? resolved.repoAccount : undefined}
           disabled={unavailable}
+          // These surfaces START a run, so the launch resolves an `auto` request — the pill
+          // offers it (spec 2026-10-12-auto-provider-selection § UI/UX). The thread's Continue
+          // pills reuse the component with `withAuto` off, because that path has no resolution.
+          withAuto
           // Changing the AGENT drops the model pick: the presets are per-runner, so a kept model
           // would be a preset the new runner does not have (composer rule). Changing only the
           // ACCOUNT keeps it — the catalog is identical across logins of the same runner.
           // Without accounts every row IS an agent, so that surface keeps its unconditional
           // reset rather than quietly gaining the re-pick-keeps-the-model behaviour.
           onPick={(next, picked) => {
-            // The pill is shared with the /new composer, whose runner union carries the `auto`
-            // request; these pills never offer it (`withAuto` stays off), so a pick here names a
-            // concrete runner by construction.
-            if (next === 'auto') return
+            // `auto` names no account (the launch resolves the backend, so no login of this
+            // surface can claim it) and no pinned model (the launch resolves that too) — both
+            // clear, exactly like switching to another agent.
+            const nextAccount = next === 'auto' ? null : picked
             onChange(
               accounts
-                ? { runner: next, account: picked, model: next === runner ? pick.model : null }
+                ? {
+                    runner: next,
+                    account: nextAccount,
+                    model: next === runner && next !== 'auto' ? pick.model : null,
+                  }
                 : { runner: next, account: null, model: null },
             )
           }}

@@ -1618,10 +1618,11 @@ export async function removeTodo(id: string): Promise<RemoveTodoResponse> {
 
 /** The Inbox card's optional backend choice + extra instructions for a Run. Unlike
  *  `ContinueOptions` these start a NEW run, so an omitted `runner`/`model` means the host's
- *  `defaultRunner`, not "keep the run's". `prompt` (#413) is extra instructions appended to the
+ *  `defaultRunner`, not "keep the run's". `auto` rides verbatim — the launch resolves it (spec
+ *  2026-10-12-auto-provider-selection). `prompt` (#413) is extra instructions appended to the
  *  suggested/summary task text — e.g. a template inserted in the Inbox composer. */
 export interface StartTodoOptions {
-  runner?: Runner
+  runner?: Runner | 'auto'
   model?: string
   prompt?: string
 }
