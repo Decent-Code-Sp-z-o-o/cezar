@@ -244,7 +244,7 @@ steps:
     prompt: "{{task}}"
     skill: project-conventions   # optional — from .ai/skills or .ai/cezar/skills
     # model: opus                # optional per-step model override
-    # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi
+    # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi · auto
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
   - id: verify
     name: Verify
@@ -622,6 +622,35 @@ is no longer advertised.
 2. **Per task** — the backend picker next to the task box in the cockpit.
 3. **Per workflow step** — `runner:` on any step in the YAML.
 
+**Auto — let cezar pick the backend.** The task picker's first card is **Auto**
+("cheapest capable provider, chosen at launch"; selecting it swaps the model
+picker for a single *model is chosen at launch* row), and the same `auto` value
+is accepted wherever a runner is named: on a workflow step, a dispatch child
+(`cez task create --runner auto`) and an automation definition. At launch cezar
+resolves it to the concrete backend + model expected to consume the fewest
+cost-weighted tokens among the providers actually usable on this host — the
+lowest cost tier wins, ties break on this workspace's own measured usage per
+model, then on cezar's runner order — and the task keeps both the resolved
+runner and the request: the header pill reads `auto → codex/gpt-5.1-codex-mini`,
+and the thread carries one lifecycle line per decision. When the resolved
+provider runs out mid-run (a usage limit with a known reset) and the reset is
+further away than `maxWaitMinutes`, the run continues on the nearest similar
+model on a **different** provider instead of waiting the window out; the
+exhausted provider stays excluded for the rest of the run, and once
+`maxFailovers` hops are spent — or no alternative exists — the usual
+wait-for-reset takes over. A task that names a concrete runner never fails over.
+A dispatched child inherits the request, not the resolution, and re-resolves at
+its own launch. With `modelsLocked` on, auto still balances the provider but
+sends no model flag, so the native agent settings stay authoritative. With no
+usable provider at all, auto degrades to `defaultRunner` with a note — a task
+still runs; auto is an optimization, not a gate. The knobs
+are `resources.autoProvider` in `~/.cezar/config.json` (Settings → Resources):
+`enabled` (default `true`), `maxFailovers` (3) and `maxWaitMinutes` (10);
+`enabled: false` resolves every `auto` to `defaultRunner` with a note and
+switches failover off. This `auto` is the backend choice, one level above the
+per-runner model entry of the same name — send no model at all and let that CLI
+decide — which keeps working on a task that named a concrete backend.
+
 Per-step overrides are what make **mixed-agent strategies** a one-liner:
 implement with one agent, review with another, and let a shell check referee:
 
@@ -737,7 +766,12 @@ root — live once in `~/.cezar/config.json`, alongside the
 [project registry](#multiple-projects-one-cockpit), and are edited from
 **Settings → Resources** and **Settings → Projects**. A `maxParallel` left over
 in a repo's `.ai/cezar/config.json` is imported into the workspace file the
-first time cezar boots there, and ignored afterwards.
+first time cezar boots there, and ignored afterwards. `resources.autoProvider` —
+`enabled`, `maxFailovers`, `maxWaitMinutes` — bounds the
+[Auto backend](#coding-agent-backends) pick and its failover: how many hops a
+run may take when its provider runs out, and how far away a usage-limit reset
+must be before cezar fails over instead of waiting. Changing it takes effect
+without a restart.
 
 **Settings → Resources** opens on a live **Machine** card, and the sidebar carries
 the same numbers as a one-row **glance** (CPU, its 60 s sparkline, compact RAM)
