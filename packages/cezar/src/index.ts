@@ -44,6 +44,7 @@ import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
+import { runSecretsCommand } from './workspace/secrets-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -57,6 +58,8 @@ Usage:
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
   cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
+  cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
+                            (set reads the value from stdin; agents never receive them)
   cezar server-install      interactive wizard to host cezar on a server
   cezar server-deploy       redeploy a new version (reload the service) + verify
   cezar server-uninstall    reverse a server-install
@@ -102,6 +105,11 @@ workflows in .ai/cezar/workflows/.`;
 async function main(): Promise<void> {
   if (process.argv[2] === 'tracker-connections') {
     process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
+    return;
+  }
+  // Local-only, like tracker-connections: `set` reads its value from stdin, never argv.
+  if (process.argv[2] === 'secrets') {
+    process.exitCode = await runSecretsCommand(process.argv.slice(3));
     return;
   }
   // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
@@ -299,7 +307,7 @@ async function serveCommand(
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
-      store.flush();
+      store.flush({ pretty: true });
       restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
     },
   });
@@ -351,7 +359,7 @@ async function serveCommand(
   console.log(`\n  cockpit → ${url}\n`);
 
   const shutdown = () => {
-    store.flush();
+    store.flush({ pretty: true });
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
@@ -397,7 +405,7 @@ async function serveCommand(
       if (!gone) return;
       try {
         process.stderr.write('  supervisor is gone — shutting down\n');
-        store.flush();
+        store.flush({ pretty: true });
       } catch {
         // Nothing left to save that is worth staying alive for.
       }
@@ -535,7 +543,7 @@ async function runCommand(
       if (r.id === run.id && ['done', 'review', 'failed', 'cancelled'].includes(r.status)) resolveStatus(r.status);
     });
   });
-  store.flush();
+  store.flush({ pretty: true });
   const record = store.getRun(run.id);
   if (final === 'review') {
     console.log(`\n  changes ready for review on branch ${record?.branch ?? '?'} — inspect them in the cockpit: npx cezar`);
