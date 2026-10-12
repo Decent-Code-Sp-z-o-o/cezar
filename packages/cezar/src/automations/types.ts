@@ -24,6 +24,14 @@ export const automationEventSchema = z.enum([
 const boundedString = z.string().trim().min(1).max(200);
 const stringList = z.array(boundedString).max(100).optional();
 
+/**
+ * The runner a definition may name: the concrete backends, or `auto` — cezar picks the cheapest
+ * capable provider when the run starts and fails over on exhaustion (spec
+ * `.ai/specs/2026-10-12-auto-provider-selection.md` Q2). `auto` never joins `RUNNER_IDS`: it is an
+ * intake value, stored verbatim and resolved at launch by the server, not here.
+ */
+const runnerRequestSchema = z.enum([...RUNNER_IDS, 'auto'] as const);
+
 export const automationFiltersSchema = z
   .object({
     authors: stringList,
@@ -46,7 +54,7 @@ export const automationTaskSchema = z
     prompt: z.string().min(1).max(100_000),
     workflow: z.string().trim().min(1).max(200).optional(),
     steps: z.array(workflowStepSchema).min(1).max(100).optional(),
-    runner: z.enum(RUNNER_IDS).optional(),
+    runner: runnerRequestSchema.optional(),
     /** Agent account the launched runs use — `POST /runs`' own `agentProfile`. Omitted = the
      *  project's selection at launch time. */
     agentProfile: z.string().trim().min(1).max(64).optional(),

@@ -29,6 +29,15 @@ describe('the dispatch prompt', () => {
     for (const runner of RUNNER_IDS) expect(containsRunnerToken(DISPATCH_PROMPT, runner)).toBe(true);
   });
 
+  it('advertises auto and that each child re-resolves it at its own launch (spec 2026-10-12 Q8)', () => {
+    expect(containsRunnerToken(DISPATCH_PROMPT, 'auto')).toBe(true);
+    expect(DISPATCH_PROMPT).toContain('pick the cheapest capable provider at launch');
+    expect(DISPATCH_PROMPT).toContain('fail over to another provider on exhaustion');
+    // Q8: the request travels, not the resolution — a child launched hours later re-derives it.
+    expect(DISPATCH_PROMPT).toMatch(/re-resolved for every child at that child's own launch/);
+    expect(DISPATCH_PROMPT).toContain('a child inherits the request, not the runner your run resolved to');
+  });
+
   it('keeps --budget optional so an uncapped parent does not invent a cap for its children', () => {
     expect(DISPATCH_PROMPT).toContain('--budget is optional: OMIT it unless the user asked for a cost limit');
     expect(DISPATCH_PROMPT).toContain('Never invent a figure');

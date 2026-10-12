@@ -221,6 +221,8 @@ describe('cez automation', () => {
     expect(await runAutomationCommand(['help'], {}, help.io)).toBe(0);
     expect(help.out[0]).toContain('cez automation create');
     for (const runner of RUNNER_IDS) expect(containsRunnerToken(help.out[0] ?? '', runner)).toBe(true);
+    // `auto` rides beside the concrete runners (spec 2026-10-12-auto-provider-selection).
+    expect(containsRunnerToken(help.out[0] ?? '', 'auto')).toBe(true);
     const unknown = harness([]);
     expect(await runAutomationCommand(['frobnicate'], env, unknown.io)).toBe(2);
     expect(unknown.err[0]).toContain('unknown command "frobnicate"');
@@ -271,6 +273,15 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
       task: { prompt: 'Read {{github.url}}', worktree: true, autonomous: false }, enable: true,
     });
     expect(h.out[0]).toContain('ENABLED from a current-time baseline');
+  });
+
+  it('add --runner auto posts the request verbatim for the server to resolve at launch', async () => {
+    const h = harness([{ status: 201, body: { automation: { id: 's2', name: 'Nightly', enabled: false, kind: 'schedule', schedule: { type: 'daily', hour: 3, minute: 0 } } } }]);
+    const code = await runAutomationCommand(['add', '--name', 'Nightly', '--cron', '0 3 * * *', '--runner', 'auto', '--prompt', 'Bump deps on {{date}}'], env, h.io);
+    expect(code).toBe(0);
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toMatchObject({
+      task: { prompt: 'Bump deps on {{date}}', worktree: true, autonomous: true, runner: 'auto' },
+    });
   });
 
   it('add refuses a cron shape it cannot express, and missing flags, as usage errors before any request', async () => {
