@@ -2930,57 +2930,68 @@ export class RunManager {
    * never end up worse than the pre-feature behavior.
    */
   private async settleAutoFailover(runId: string, limit: UsageLimitHit): Promise<void> {
-    let run = this.store.getRun(runId);
-    if (!run || run.status !== 'failed') return; // continued/cancelled under us
-    const failed = failedCandidateOf(run);
-    const autoProvider = this.semaphore.autoProvider();
-    let selection: AutoSelection | null = null;
-    if (failed) {
-      const config = await loadConfig(this.repoRoot);
-      const availability = await this.providerAvailability().catch(() => undefined);
-      selection = pickFailoverSelection(failed, availability, {
-        defaultRunner: config.defaultRunner,
-        locked: agentModelsLocked(this.repoRoot),
-        maxFailovers: autoProvider.maxFailovers,
-        excludeProviders: run.excludedProviders,
+    try {
+      const run = this.store.getRun(runId);
+      if (!run || run.status !== 'failed' || run.archived) return; // continued/cancelled under us
+      const failed = failedCandidateOf(run);
+      const autoProvider = this.semaphore.autoProvider();
+      let selection: AutoSelection | null = null;
+      if (failed) {
+        const config = await loadConfig(this.repoRoot);
+        const availability = await this.providerAvailability().catch(() => undefined);
+        selection = pickFailoverSelection(failed, availability, {
+          defaultRunner: config.defaultRunner,
+          locked: agentModelsLocked(this.repoRoot),
+          maxFailovers: autoProvider.maxFailovers,
+          excludeProviders: run.excludedProviders,
+        });
+      }
+      // The awaits above are a window: the record may have been continued, cancelled or archived
+      // while the probe ran. `continueRun` re-refuses an active/settled run, but archiving alone
+      // changes no status — and archiving IS resigning, exactly the signal the wait half honors.
+      const latest = failed ? this.store.getRun(runId) : undefined;
+      if (!latest || latest.status !== 'failed' || latest.archived) return;
+      if (!selection) {
+        this.armUsageLimitResume(runId, limit);
+        return;
+      }
+      // The failed provider joins the exclusion set for the rest of the run — the ping-pong guard:
+      // a later hop may not land back on the account that just died, whichever CLI fronts it.
+      const excluded = [...new Set([...(latest.excludedProviders ?? []), failed!.provider.toLowerCase()])];
+      const failoverCount = (latest.failoverCount ?? 0) + 1;
+      const resumed = this.continueRun(
+        runId,
+        { text: AUTO_FAILOVER_PROMPT, runner: selection.runner, model: selection.model ?? '' },
+        true,
+      );
+      if (!resumed.ok) {
+        // Refused before anything persisted — the run stays on its failed provider, so the ordinary
+        // wait applies. The refusal is named so the audit trail shows the hop that did not happen.
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `usage-limit failover could not start — ${resumed.error ?? 'unknown'}; waiting for the reset instead`,
+        });
+        this.armUsageLimitResume(runId, limit);
+        return;
+      }
+      this.store.updateRun(runId, {
+        failoverCount,
+        excludedProviders: excluded,
+        resolvedModel: selection.model,
       });
-    }
-    if (!selection) {
-      this.armUsageLimitResume(runId, limit);
-      return;
-    }
-    // The failed provider joins the exclusion set for the rest of the run — the ping-pong guard:
-    // a later hop may not land back on the account that just died, whichever CLI fronts it.
-    const excluded = [...new Set([...(run.excludedProviders ?? []), failed!.provider.toLowerCase()])];
-    const failoverCount = (run.failoverCount ?? 0) + 1;
-    const resumed = this.continueRun(
-      runId,
-      { text: AUTO_FAILOVER_PROMPT, runner: selection.runner, model: selection.model ?? '' },
-      true,
-    );
-    if (!resumed.ok) {
-      // Refused before anything persisted — the run stays on its failed provider, so the ordinary
-      // wait applies. The refusal is named so the audit trail shows the hop that did not happen.
       this.store.appendEvent(runId, {
-        type: 'note',
-        message: `usage-limit failover could not start — ${resumed.error ?? 'unknown'}; waiting for the reset instead`,
+        type: 'lifecycle',
+        message: `usage limit until ${formatWakeInstant(limit.resetAt)} - failing over to ${
+          selection.model ? `${selection.runner}/${selection.model}` : selection.runner
+        }${selection.model ? ` (tier ${selection.candidate?.tier ?? modelCostTier(selection.model)})` : ' (runner default)'}`,
       });
+      // A deferred continuation only ENQUEUES itself (the `fireAutoResume` rule) — this is its pump.
+      void this.pump();
+    } catch {
+      // Fire-and-forget from `beginAutoFailover`: a hop must never crash the process, and the run
+      // still has the wait to fall back on — arm it best-effort and let the record speak.
       this.armUsageLimitResume(runId, limit);
-      return;
     }
-    this.store.updateRun(runId, {
-      failoverCount,
-      excludedProviders: excluded,
-      resolvedModel: selection.model,
-    });
-    this.store.appendEvent(runId, {
-      type: 'lifecycle',
-      message: `usage limit until ${formatWakeInstant(limit.resetAt)} - failing over to ${
-        selection.model ? `${selection.runner}/${selection.model}` : selection.runner
-      }${selection.model ? ` (tier ${selection.candidate?.tier ?? modelCostTier(selection.model)})` : ' (runner default)'}`,
-    });
-    // A deferred continuation only ENQUEUES itself (the `fireAutoResume` rule) — this is its pump.
-    void this.pump();
   }
 
   /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it. */
