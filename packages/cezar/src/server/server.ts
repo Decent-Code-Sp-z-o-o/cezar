@@ -3173,6 +3173,7 @@ export function createApp(deps: ServerDeps) {
       idleTimeoutMinutes: config.resources.idleTimeoutMinutes,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
+      autoProvider: config.resources.autoProvider,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
@@ -3260,6 +3261,14 @@ export function createApp(deps: ServerDeps) {
           }
           if (resources?.autoResumeOnUsageLimit !== undefined) {
             config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
+          }
+          // Auto provider selection (spec 2026-10-12 Q6): merged per key over the current value,
+          // so a partial patch edits one knob without resetting the others.
+          if (resources?.autoProvider !== undefined) {
+            config.resources.autoProvider = {
+              ...config.resources.autoProvider,
+              ...resources.autoProvider,
+            };
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {

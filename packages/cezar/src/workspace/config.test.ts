@@ -111,7 +111,7 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 }, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.composerDefaults).toEqual({});
     expect(config.projects).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
@@ -323,8 +323,30 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 }, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.projects).toEqual([project('good')]);
+  });
+
+  it('autoProvider keeps its defaults when absent and degrades per-key when junk (spec 2026-10-12 Q6)', async () => {
+    // Absent — the whole object materializes from defaults, like every other resources key.
+    write({ resources: {} });
+    expect((await loadWorkspaceConfig()).resources.autoProvider).toEqual({
+      enabled: true,
+      maxFailovers: 3,
+      maxWaitMinutes: 10,
+    });
+    // A partial edit survives: only the named key moves.
+    write({ resources: { autoProvider: { maxFailovers: 0 } } });
+    expect((await loadWorkspaceConfig()).resources.autoProvider).toEqual({
+      enabled: true,
+      maxFailovers: 0,
+      maxWaitMinutes: 10,
+    });
+    // Junk degrades per-key, never taking the rest of `resources` with it.
+    write({ resources: { autoProvider: 'nonsense', maxParallel: 4 } });
+    const config = await loadWorkspaceConfig();
+    expect(config.resources.autoProvider).toEqual({ enabled: true, maxFailovers: 3, maxWaitMinutes: 10 });
+    expect(config.resources.maxParallel).toBe(4);
   });
 
   /**
