@@ -82,6 +82,7 @@ import {
   type NewTaskDraft,
 } from './new-task-draft'
 import {
+  AUTO_MODEL_ROW,
   buildCreateRunBody,
   modelsForRunner,
   modelCatalogStatus,
@@ -90,6 +91,7 @@ import {
   resolveRunner,
   resolveSource,
   startedRunPath,
+  type ComposerRunner,
   type TaskSource,
 } from './new-task-form'
 import { parseNewTaskParams } from './new-task-params'
@@ -230,17 +232,29 @@ export function NewTaskRoute() {
   const runners = usableRunners(providers.data)
   const defaultRunner = config.data?.defaultRunner
   const preferredRunner = defaultRunner ?? 'claude'
-  const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
+  // The Auto request (spec 2026-10-12-auto-provider-selection) is decided BEFORE the concrete
+  // resolution: it names no backend, so no provider probe can retire it — cezar picks the runner
+  // and the model at launch. Everything else resolves exactly as it always did.
+  const runner: ComposerRunner | null =
+    runners.length === 0
+      ? null
+      : draft.runner === 'auto'
+        ? 'auto'
+        : resolveRunner(draft.runner, runners, preferredRunner)
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
-  const catalog = useRunnerModels(displayRunner)
+  // The catalog belongs to a CONCRETE runner: under `auto` the model pill is collapsed and no
+  // model is pinned, so the request is not even fired — the runner named here is only the hook's
+  // concrete-typed stand-in, and the status line under the pill is suppressed with it.
+  const catalogRunner: Runner = displayRunner === 'auto' ? preferredRunner : displayRunner
+  const catalog = useRunnerModels(catalogRunner, displayRunner !== 'auto')
   const modelsLocked = config.data?.modelsLocked === true
-  const models = runner === null
-    ? []
-    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
-  const model = runner === null
-    ? ''
-    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+  const models = runner !== null && runner !== 'auto'
+    ? modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
+    : []
+  const model = runner !== null && runner !== 'auto'
+    ? resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+    : ''
   // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
@@ -396,8 +410,10 @@ export function NewTaskRoute() {
     // connected runner for the editable composer, but that fallback must not turn an
     // unattended launch into a task on a different subscription (or hide an unauthorized
     // default behind a successful-looking start). Leave the prompt in the composer so the
-    // user can explicitly choose what should run.
-    if (runner !== defaultRunner) {
+    // user can explicitly choose what should run. The `auto` arm comes first for the same
+    // reason it could never equal the default — a concrete runner is what a bookmarklet
+    // targets — and it is what narrows `runner` to one for the start below.
+    if (runner === 'auto' || runner !== defaultRunner) {
       setNotice({ kind: 'prefill' })
       setAutoStarting(false)
       return
@@ -632,17 +648,20 @@ export function NewTaskRoute() {
                 onPick={(next) => update({ source: next })}
               />
               {/* Shown when there is a choice to make: more than one runner, or more than one
-                  login for one of them. A host with neither sees no pill, exactly as before. */}
+                  login for one of them. A host with neither sees no pill, exactly as before — the
+                  Auto card rides inside it whenever it is shown, never summons it. */}
               {runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id)) ? (
                 <RunnerPill
                   runners={runners}
                   value={displayRunner}
+                  withAuto
                   accounts={accountChoices}
                   account={agentProfile}
                   repoAccount={repoAccount}
                   // Changing the AGENT clears the model pin: presets are per-runner, so a kept
                   // model would be one the new runner does not have. Changing only the account
-                  // keeps it — the model catalog is the same either way.
+                  // keeps it — the model catalog is the same either way. Switching to `auto`
+                  // clears it for the same reason: the launch picks the model itself.
                   onPick={(next, picked) =>
                     update({
                       runner: next,
@@ -653,21 +672,25 @@ export function NewTaskRoute() {
                   disabled={!providersReady}
                 />
               ) : null}
+              {/* Under the Auto runner the picker collapses to one non-interactive row (spec
+                  2026-10-12-auto-provider-selection § UI/UX): no model can be pinned when the
+                  launch picks the provider and the model together. */}
               <PickerPill
                 slot="model-pill"
                 ariaLabel="Model"
-                label={models.find((m) => m.id === model)?.label ?? 'auto'}
+                label={runner === 'auto' ? AUTO_MODEL_ROW : models.find((m) => m.id === model)?.label ?? 'auto'}
                 value={model}
                 disabled={!providersReady}
-                readOnly={modelsLocked}
+                readOnly={modelsLocked || runner === 'auto'}
                 disabledHint={
                   modelsLocked
                     ? 'Model selection is locked to native coding-agent settings.'
                     : undefined
                 }
+                hint={runner === 'auto' ? 'cezar picks the provider and model when the task launches' : undefined}
                 onPick={(next) => update({ model: next })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
-                status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+                status={runner === 'auto' ? undefined : modelCatalogStatus(catalogRunner, catalog.data, catalog.isError)}
               />
               <PickerPill
                 slot="variants-pill"
@@ -725,7 +748,11 @@ export function NewTaskRoute() {
                 onChange={changeDispatch}
                 onSettingsOpenChange={setDispatchSettingsOpen}
                 runners={runners}
-                parentRunner={displayRunner}
+                // The subtask picker speaks concrete runners, and "same as parent" resolves its
+                // model list against this one. Under `auto` the preferred runner stands in for
+                // that list — the child itself inherits the auto REQUEST (spec Q8) and resolves
+                // its own runner and model at its own launch.
+                parentRunner={catalogRunner}
                 // The composer's own catalog, already fetched for the runner this task runs as —
                 // the list "same as parent" resolves to. A subtask runner the user changes to
                 // discovers its own inside the toggle, which is the only place that knows it.
