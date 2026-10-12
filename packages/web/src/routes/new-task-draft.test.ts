@@ -151,6 +151,12 @@ describe('the new-task draft store', () => {
     expect(readDraft().text).toBe('fix it')
   })
 
+  it('keeps the auto runner request sticky like any runner pick (spec 2026-10-12-auto-provider-selection)', () => {
+    writeDraft({ ...EMPTY_DRAFT, runner: 'auto' })
+    // Through storage and back: the request survives the reload the rest of the pill row survives.
+    expect(readDraft().runner).toBe('auto')
+  })
+
   it('clearStartedDraft spends the text AND the source, keeping the way-of-working pills', () => {
     writeDraft({
       text: 'shipped',

@@ -280,13 +280,17 @@ export function EnginePills({
           // ACCOUNT keeps it — the catalog is identical across logins of the same runner.
           // Without accounts every row IS an agent, so that surface keeps its unconditional
           // reset rather than quietly gaining the re-pick-keeps-the-model behaviour.
-          onPick={(next, picked) =>
+          onPick={(next, picked) => {
+            // The pill is shared with the /new composer, whose runner union carries the `auto`
+            // request; these pills never offer it (`withAuto` stays off), so a pick here names a
+            // concrete runner by construction.
+            if (next === 'auto') return
             onChange(
               accounts
                 ? { runner: next, account: picked, model: next === runner ? pick.model : null }
                 : { runner: next, account: null, model: null },
             )
-          }
+          }}
         />
       ) : null}
       <PickerPill

@@ -140,6 +140,10 @@ export function useContinueAction(run: ApiRun): ContinueAction {
             account={account}
             repoAccount={accountDefaults}
             onPick={(next, picked) => {
+              // The pill is shared with the /new composer, whose runner union carries the `auto`
+              // request; this pill never offers it (`withAuto` stays off), so a pick here names a
+              // concrete runner by construction.
+              if (next === 'auto') return
               setPickedAccount(picked)
               // Picking another LOGIN of the agent already in force is not a backend choice, so it
               // must not become one: recording it would put a `runner` on the wire that the run is
