@@ -1,3 +1,8 @@
+# Unreleased
+
+## ✨ Features
+- ✨ Auto provider selection: a task can ask for a backend instead of naming one — the composer's **Auto** card, `cez task create --runner auto`, `runner: auto` on a workflow step or in an automation definition — and cezar resolves it at launch to the cheapest capable provider and model on the host, then fails over to a similar model on a different provider when that one runs out, bounded by `resources.autoProvider` (`maxFailovers` 3, `maxWaitMinutes` 10). Records keep both the resolved runner and the `auto` request; tasks naming a concrete runner never fail over and keep waiting for their own provider's reset.
+
 # 0.15.0 (2026-10-11)
 
 ## Highlights
