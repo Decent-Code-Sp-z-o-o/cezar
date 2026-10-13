@@ -934,6 +934,99 @@ describe('reduceThread — AskUser cards (#473)', () => {
 })
 
 /**
+ * Engine-authored continuation prompts (restart recovery, usage-limit resume, usage-limit
+ * failover). The engine has always written its own resume prompts as `user-message` lines, and
+ * the thread rendered every one as if the user had typed it — real transcripts accumulated
+ * dozens of identical "The cezar process restarted…" bubbles. The lines now carry
+ * `engineAuthored: true`; the fold still opens the turn (the agent's work below it needs one)
+ * but attaches no bubble, and never lets one answer a pending ask (#473).
+ */
+describe('reduceThread — engine-authored continuation prompts', () => {
+  const RESTART_PROMPT =
+    'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.'
+
+  it('a marked event opens the turn and stamps its start, but attaches NO user bubble', () => {
+    const { turns } = reduceThread([
+      line(1, 'user-message', { text: RESTART_PROMPT, imageCount: 0, engineAuthored: true, stepId: 'continue-1' }),
+      line(2, 'text', { text: 'Picking the task back up.', stepId: 'continue-1' }),
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.userMessage).toBeUndefined()
+    expect(turns[0]!.startedAt).toBe('2026-07-14T12:00:00.000Z')
+    // The turn is real — the agent's own output renders inside it.
+    expect(kinds(turns[0]!.items)).toEqual(['message'])
+  })
+
+  it('an unmarked user-message still renders the bubble, exactly as before', () => {
+    const { turns } = reduceThread([
+      line(1, 'user-message', { text: 'Continue.', imageCount: 0, stepId: 'continue-1' }),
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.userMessage).toEqual({
+      text: 'Continue.',
+      imageCount: 0,
+      images: [],
+      ts: '2026-07-14T12:00:00.000Z',
+    })
+    expect(turns[0]!.startedAt).toBe('2026-07-14T12:00:00.000Z')
+  })
+
+  it('the engine flag on any other value than true changes nothing (forward-safe)', () => {
+    const { turns } = reduceThread([
+      line(1, 'user-message', { text: 'do it', imageCount: 0, engineAuthored: 'no' }),
+    ])
+    expect(turns[0]!.userMessage?.text).toBe('do it')
+  })
+
+  it('a marked prompt does NOT resolve a pending ask nor become its answer (#473)', () => {
+    const ask = {
+      requestId: 'ask_1',
+      questions: [
+        { header: 'Library', question: 'Which?', options: [{ label: 'date-fns' }, { label: 'Luxon' }] },
+      ],
+    }
+    const items = reduceThread([
+      line(1, 'text', { text: 'options', stepId: 'task' }),
+      line(2, 'ask.requested', { ...ask, stepId: 'task' }),
+      // The run failed on a usage limit after asking; the reset fired the engine's resume.
+      line(3, 'user-message', { text: RESTART_PROMPT, imageCount: 0, engineAuthored: true, stepId: 'continue-1' }),
+      line(4, 'text', { text: 'Continuing on the same question.', stepId: 'continue-1' }),
+    ]).turns.flatMap((turn) => turn.items)
+    const card = items.find((i) => i.kind === 'ask')
+    expect(card).toMatchObject({ kind: 'ask', id: 'ask_1', resolved: false })
+    expect(card).not.toHaveProperty('answer')
+  })
+
+  it('the USER\'S message after a marked prompt still resolves the ask', () => {
+    const ask = {
+      requestId: 'ask_1',
+      questions: [
+        { header: 'Library', question: 'Which?', options: [{ label: 'date-fns' }, { label: 'Luxon' }] },
+      ],
+    }
+    const items = reduceThread([
+      line(1, 'ask.requested', ask),
+      line(2, 'user-message', { text: RESTART_PROMPT, imageCount: 0, engineAuthored: true, stepId: 'continue-1' }),
+      line(3, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+    ]).turns.flatMap((turn) => turn.items)
+    expect(items.find((i) => i.kind === 'ask')).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+  })
+
+  it('a marked prompt still opens a DISTINCT turn the v2 turn.started can attach to', () => {
+    const { turns } = reduceThread([
+      line(1, 'user-message', { text: 'first', imageCount: 0 }),
+      line(2, 'turn.started', { turnId: 't1' }),
+      line(3, 'turn.completed', { turnId: 't1', stopReason: 'end_turn' }),
+      line(4, 'user-message', { text: RESTART_PROMPT, imageCount: 0, engineAuthored: true, stepId: 'continue-1' }),
+      line(5, 'turn.started', { turnId: 't2' }),
+    ])
+    expect(turns).toHaveLength(2)
+    expect(turns[1]!.turnId).toBe('t2')
+    expect(turns[1]!.userMessage).toBeUndefined()
+  })
+})
+
+/**
  * Per-turn timestamps (#941). The reducer only THREADS the stamps that were already on the
  * wire — no new persisted field, no new API — so what these pin is that it threads exactly the
  * three (`userMessage.ts`, `startedAt`, `completed.ts`), and that a transcript with no usable

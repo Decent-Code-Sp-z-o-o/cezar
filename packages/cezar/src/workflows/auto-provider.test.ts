@@ -173,6 +173,16 @@ describe('auto provider selection', () => {
     expect(hopped?.error).toContain('continue failed');
     // No wait was armed — the failover replaced it.
     expect(hopped?.autoResumeAt).toBeUndefined();
+    // The hop's opening line is the ENGINE's prompt: stamped so the thread never renders it as a
+    // message the user sent, with the text still verbatim for the agent.
+    const opening = store
+      .readEvents(record.id)
+      .find((event) => event.type === 'user-message' && event.stepId === 'continue-1');
+    expect(opening?.engineAuthored).toBe(true);
+    // The queued hop re-attaches the task text (#472); the engine prompt leads verbatim.
+    expect(String(opening?.text).startsWith(
+      'The provider this task was running on hit its usage limit, so the task is continuing on a different provider. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where it left off.',
+    )).toBe(true);
   }, 90_000);
 
   it('waits instead when the reset is inside maxWaitMinutes', async () => {
