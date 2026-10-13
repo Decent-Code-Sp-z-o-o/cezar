@@ -1493,8 +1493,8 @@ export function useAgentProfiles() {
   })
 }
 
-/** The opt-in telemetry answer. Read by the consent bar and Settings → Privacy; both write
- *  through `putTelemetryConsent` and set this cache from the answer. */
+/** The opt-in telemetry answer. Read by Settings → Privacy, which writes through
+ *  `putTelemetryConsent` and sets this cache from the answer. */
 export function useTelemetryConsent() {
   return useQuery({
     queryKey: workspaceQueryKeys.telemetryConsent,

@@ -16,7 +16,7 @@ import { SID_HEADER, sid } from '@/lib/sid'
 /**
  * Cockpit half of the opt-in telemetry (`packages/cezar/src/telemetry.ts`, docs/telemetry.md). The
  * worker sends no CORS headers, so the browser reports through `/api/v1/telemetry/*`; the server
- * drops everything until the user opted in (`components/telemetry-consent.tsx`). Fire-and-forget: never awaited, never throws.
+ * drops everything until the user opted in (Settings → Privacy, docs/telemetry.md). Fire-and-forget: never awaited, never throws.
  *
  * Every error report is ONE wide event (https://loggingsucks.com/): the page, the session, the
  * client and the build it runs, as flat `context` keys — never a bare message. The server relay
