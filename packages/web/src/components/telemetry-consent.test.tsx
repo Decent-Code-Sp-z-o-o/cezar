@@ -1,14 +1,20 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
-import type { TelemetryConsentPayload } from '@open-mercato/cezar-api-client'
-import { shouldAskForTelemetry } from '@/lib/telemetry-consent'
-import { TelemetryConsentBanner } from './telemetry-consent'
+import type { HealthResponse, TelemetryConsentPayload } from '@open-mercato/cezar-api-client'
+import { AppShellContainer } from '@/components/app-shell-container'
+import { ThemeProvider } from '@/components/theme-provider'
 
-/** The opt-in bar: who sees it, and that each answer records exactly what the user did. */
+/**
+ * The cockpit never asks for telemetry consent. The opt-in bar that used to sit at the bottom of
+ * the shell is gone on purpose (docs/telemetry.md): a machine that has never answered keeps
+ * consent 'unknown', the server sends nothing, and the only place a person can still opt in is
+ * Settings → Privacy. These tests pin the removal — the ask must not quietly grow back.
+ */
 
 const UNKNOWN: TelemetryConsentPayload = {
   consent: 'unknown',
@@ -17,93 +23,108 @@ const UNKNOWN: TelemetryConsentPayload = {
   endpoint: 'https://stats.openmercato.cloud',
 }
 
-let clients: QueryClient[] = []
-let fetchMock: ReturnType<typeof vi.fn>
+const HEALTH: HealthResponse = {
+  version: '0.1.3',
+  projects: [],
+  bootProject: 'default',
+  repoRoot: '/home/me/Projects/cezar',
+  repo: { root: '/home/me/Projects/cezar', branch: 'feat/cockpit', remote: 'origin' },
+  checks: [],
+  defaultRunner: 'claude',
+  forge: null,
+  capabilities: { localHandoff: true,
+  terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+}
 
-function mount(payload: TelemetryConsentPayload) {
-  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body ?? '{}')) as { consent?: string }
-    return new Response(JSON.stringify({ ...payload, consent: body.consent }), {
+const fetchMock = vi.fn<typeof fetch>()
+
+beforeEach(() => {
+  document.title = 'cezar'
+  vi.stubGlobal('fetch', fetchMock)
+  // jsdom ships no matchMedia; the shell's breakpoint effect and the theme toggle need one.
+  vi.stubGlobal(
+    'matchMedia',
+    () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+  )
+  vi.stubGlobal('ResizeObserver', class { observe() {}; unobserve() {}; disconnect() {} })
+  Element.prototype.scrollIntoView = vi.fn()
+  // Answer the endpoints the shell reads so it comes up like it would on a real machine. The
+  // consent endpoint has no meaningful answer here: the shell must never ask for it (pinned below).
+  fetchMock.mockImplementation(async (input) => {
+    const path = String(input)
+    const body =
+      path === '/api/v1/health'
+        ? HEALTH
+        : path === '/api/v1/todos'
+          ? []
+          : path === '/api/v1/projects'
+            ? { projects: [], bootProject: 'default', projectsDir: '/repos' }
+            : path === '/api/v1/providers/status'
+              ? { providers: [] }
+              : {}
+    return new Response(JSON.stringify(body), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
   })
-  vi.stubGlobal('fetch', fetchMock)
+})
+
+afterEach(() => {
+  cleanup()
+  fetchMock.mockReset()
+  vi.unstubAllGlobals()
+})
+
+function renderShell(consent?: TelemetryConsentPayload) {
   const client = createQueryClient()
-  clients.push(client)
-  client.setQueryData(workspaceQueryKeys.telemetryConsent, payload)
+  // Seeded BEFORE the shell mounts, so any ask that did exist would see the unanswered machine.
+  if (consent) client.setQueryData(workspaceQueryKeys.telemetryConsent, consent)
   render(
     <QueryClientProvider client={client}>
-      <TelemetryConsentBanner />
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <AppShellContainer>
+            <p>route content</p>
+          </AppShellContainer>
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client
 }
 
-afterEach(() => {
-  cleanup()
-  for (const c of clients) c.clear()
-  clients = []
-  vi.unstubAllGlobals()
-})
+const banner = () => document.querySelector('[data-slot="telemetry-consent-banner"]')
+const detailsDialog = () => document.querySelector('[data-slot="telemetry-details-dialog"]')
+const askedTelemetry = () => fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes('telemetry'))
 
-describe('shouldAskForTelemetry', () => {
-  it('asks only an unanswered machine that could actually send', () => {
-    expect(shouldAskForTelemetry(UNKNOWN)).toBe(true)
-    expect(shouldAskForTelemetry({ ...UNKNOWN, consent: 'granted' })).toBe(false)
-    expect(shouldAskForTelemetry({ ...UNKNOWN, consent: 'denied' })).toBe(false)
-    expect(shouldAskForTelemetry({ ...UNKNOWN, blockedBy: 'env' })).toBe(false)
-    expect(shouldAskForTelemetry({ ...UNKNOWN, blockedBy: 'automation' })).toBe(false)
-    expect(shouldAskForTelemetry(undefined)).toBe(false)
-  })
-})
+describe('the shell never asks for telemetry consent', () => {
+  it('renders no consent bar for an unanswered machine that nothing blocks', async () => {
+    renderShell(UNKNOWN)
 
-describe('TelemetryConsentBanner', () => {
-  const banner = () => document.querySelector('[data-slot="telemetry-consent-banner"]')
-  const dialog = () => document.querySelector('[data-slot="telemetry-details-dialog"]')
-
-  it('shows the bar for an unanswered machine, with no dialog', () => {
-    mount(UNKNOWN)
-    expect(banner()).not.toBeNull()
-    expect(dialog()).toBeNull()
-    expect(screen.getByText('Help improve cezar?')).toBeTruthy()
+    await screen.findByText('route content')
+    expect(banner()).toBeNull()
+    expect(detailsDialog()).toBeNull()
+    expect(screen.queryByText('Help improve cezar?')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Share usage data' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Don’t share' })).toBeNull()
   })
 
-  it('renders nothing once answered or when sending is blocked', () => {
-    mount({ ...UNKNOWN, consent: 'denied' })
+  it('renders no consent bar while the consent answer has not arrived either', async () => {
+    // The query cache is empty: consent is unknown because nobody has answered, not because the
+    // server said so. Still no ask — an unanswered machine is simply never asked again.
+    renderShell()
+
+    await screen.findByText('route content')
     expect(banner()).toBeNull()
-    cleanup()
-    mount({ ...UNKNOWN, blockedBy: 'automation' })
-    expect(banner()).toBeNull()
+    expect(detailsDialog()).toBeNull()
   })
 
-  it.each([
-    ['telemetry-grant', 'granted'],
-    ['telemetry-deny', 'denied'],
-  ] as const)('%s records %s and removes the bar', async (slot, consent) => {
-    const client = mount(UNKNOWN)
-    await act(async () => {
-      fireEvent.click(document.querySelector(`[data-slot="${slot}"]`)!)
-    })
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/telemetry/consent')
-    expect(init.method).toBe('PUT')
-    expect(JSON.parse(String(init.body))).toEqual({ consent })
-    expect(client.getQueryData<TelemetryConsentPayload>(workspaceQueryKeys.telemetryConsent)?.consent).toBe(consent)
-    expect(banner()).toBeNull()
-  })
+  it('neither reads nor writes the consent endpoint from the shell', async () => {
+    renderShell(UNKNOWN)
 
-  it('opens the details dialog only on request, and answers from it', async () => {
-    mount(UNKNOWN)
-    fireEvent.click(document.querySelector('[data-slot="telemetry-details"]')!)
-    expect(dialog()).not.toBeNull()
-    expect(screen.getByText('Usage data, in full')).toBeTruthy()
-    expect(fetchMock).not.toHaveBeenCalled()
-    await act(async () => {
-      fireEvent.click(dialog()!.querySelector('[data-slot="telemetry-grant"]')!)
-    })
-    expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({ consent: 'granted' })
-    expect(dialog()).toBeNull()
-    expect(banner()).toBeNull()
+    await screen.findByText('route content')
+    // Removing the bar removed its only reader in the shell: consent stays wherever the server
+    // keeps it, and nothing here can PUT an answer on the user's behalf.
+    expect(askedTelemetry()).toEqual([])
   })
 })
