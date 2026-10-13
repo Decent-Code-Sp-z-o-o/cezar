@@ -18,7 +18,16 @@ export function useRunEngine(run: ApiRun) {
   const config = useConfig()
   const profiles = useAgentProfiles()
   const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
-  const model = run.model ?? 'auto'
+  // The model the run actually asked its backend for: the composer's pick, or — on an auto run —
+  // the model the launch pinned (`resolvedModel`). Absent on both counts reads "auto".
+  const model = run.model ?? run.resolvedModel ?? 'auto'
+  // The auto REQUEST (spec 2026-10-12-auto-provider-selection): the record keeps the ask and the
+  // decision as two things — `runnerRequest` is the literal `'auto'`, `runner`/`resolvedModel`
+  // the launch's answer, `failoverCount`/`excludedProviders` what the exhaustion cost. The badge
+  // names both halves because that is the honest history of the run.
+  const requestedAuto = run.runnerRequest === 'auto'
+  const hops = run.failoverCount ?? 0
+  const excluded = run.excludedProviders ?? []
   // The account is read from the STEP that actually spawned, never from the run's composer
   // override or the project's current selection (spec 2026-07-29-agent-profiles): the override is
   // absent whenever the run just followed the project, and the project's selection can have been
@@ -36,8 +45,13 @@ export function useRunEngine(run: ApiRun) {
   // something `model` does not (#546). Absent on pre-#405 records and skipped when it merely
   // repeats `model` — an identity nothing wrote down is not one a reader may invent.
   const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
-  const summary = [runner, account, model].filter(Boolean).join(' · ')
-  return { runner, account, model, identity, summary }
+  // `auto → claude/haiku`, and after a failover `auto → codex/… (hop 1)` — with the exhausted
+  // providers named, since a hop is exactly the kind of decision a reader wants the why of. The
+  // cost tier stays in the thread's lifecycle line; the badge does not re-derive pricing.
+  const summary = requestedAuto
+    ? `auto → ${runner}/${model}${hops > 0 ? ` (hop ${hops})` : ''}${excluded.length > 0 ? ` — ${excluded.join(', ')} excluded` : ''}`
+    : [runner, account, model].filter(Boolean).join(' · ')
+  return { runner, account, model, identity, summary, requestedAuto, hops, excluded }
 }
 
 /**

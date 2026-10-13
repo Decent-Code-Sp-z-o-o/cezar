@@ -1281,7 +1281,7 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  question only a user debugging "which provider actually served this?" asks, so it belongs
  *  behind the same disclosure as the account rather than in the truncating summary line. */
 function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
-  const { runner, account, model, identity, summary } = useRunEngine(run)
+  const { runner, account, model, identity, summary, requestedAuto, hops, excluded } = useRunEngine(run)
   return (
     <DropdownMenu>
       {/* Icon only: the chat box names the engine in its pills on every state now (run-engine.tsx),
@@ -1303,6 +1303,26 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
           runner: {runner}
         </DropdownMenuLabel>
+        {/* The auto request, kept next to the decision it produced (spec 2026-10-12-auto-provider-
+            selection § UI/UX): what the task ASKED for and what the launch picked are two facts,
+            and a run that hopped providers names the hops and the accounts it left behind. */}
+        {requestedAuto ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-request"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            request: auto → {runner}/{model}
+          </DropdownMenuLabel>
+        ) : null}
+        {requestedAuto && hops > 0 ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-failovers"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            failovers: {hops}
+            {excluded.length > 0 ? ` — ${excluded.join(', ')} excluded` : ''}
+          </DropdownMenuLabel>
+        ) : null}
         {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
             cannot be said to have used the discovered account — nothing wrote that down. */}
         {account ? (
