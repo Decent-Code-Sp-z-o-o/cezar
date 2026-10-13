@@ -32,6 +32,8 @@ import type {
   CancelResponse,
   ChangesPayload,
   CheckoutProjectInput,
+  CreateProjectInput,
+  GithubOwnersResponse,
   ConfigResponse,
   ReclaimWorktreesResponse,
   RemoveWorktreeResponse,
@@ -100,6 +102,8 @@ import type {
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
+  SetTelemetryConsentInput,
+  TelemetryConsentPayload,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -148,12 +152,15 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  githubOwnersResponseSchema,
   trackerCompleteResponseSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
+import { SID_HEADER, sid } from '@/lib/sid'
+import { noteFailedRequest } from '@/lib/failed-request'
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -393,9 +400,16 @@ async function unwrapValidated<R extends ClientResponse<unknown, number, Respons
  */
 async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(url, { ...init, credentials: 'include' })
+    // The device id rides every request, so whatever this device does server-side (start a
+    // task, hit an error) is attributed to it — see lib/sid.ts.
+    const headers = new Headers(init?.headers)
+    headers.set(SID_HEADER, sid())
+    const res = await fetch(url, { ...init, headers, credentials: 'include' })
+    if (!res.ok) noteFailedRequest(url, init?.method, res.status)
+    return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    noteFailedRequest(url, init?.method, 0)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
 }
@@ -431,6 +445,16 @@ const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent
 /** Version, update check, repo/branch, and the tool probes behind the Tools menu. */
 export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
+}
+
+/** The opt-in telemetry answer (`~/.cezar/config.json`), behind the consent bar and
+ *  Settings → Privacy. */
+export async function getTelemetryConsent(opts?: ReadOptions): Promise<TelemetryConsentPayload> {
+  return unwrap(await cez.api.v1.telemetry.consent.$get({}, init(opts)), '/telemetry/consent')
+}
+
+export async function putTelemetryConsent(input: SetTelemetryConsentInput): Promise<TelemetryConsentPayload> {
+  return unwrap(await cez.api.v1.telemetry.consent.$put({ json: input }), '/telemetry/consent')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
@@ -1308,6 +1332,27 @@ export async function registerProject(root: string): Promise<RegisterProjectResp
  */
 export async function checkoutProject(input: CheckoutProjectInput): Promise<RegisterProjectResponse> {
   return unwrap(await cez.api.v1.projects.checkout.$post({ json: input }), '/projects/checkout')
+}
+
+/**
+ * Create a new project — a fresh git repo, optionally backed by a new private GitHub repo
+ * (`POST /api/projects/create`, spec 2026-09-29-create-new-project). Same contract as
+ * `checkoutProject`: every non-2xx is a failure whose `{ error }` the dialog shows verbatim, and
+ * progress arrives as `checkout-progress` keyed by `input.checkoutId`.
+ */
+export async function createProject(input: CreateProjectInput): Promise<RegisterProjectResponse> {
+  return unwrap(await cez.api.v1.projects.create.$post({ json: input }), '/projects/create')
+}
+
+/** Who a new GitHub repository may belong to (`GET /api/projects/github-owners`). Workspace-level.
+ *  Validated, not cast: the dialog iterates `owners`, so a body of another shape — a server
+ *  started before the owner cards, a proxy — must reject the query rather than throw mid-render. */
+export async function getGithubOwners(opts?: ReadOptions): Promise<GithubOwnersResponse> {
+  return unwrapValidated(
+    await cez.api.v1.projects['github-owners'].$get({}, init(opts)),
+    '/projects/github-owners',
+    githubOwnersResponseSchema,
+  )
 }
 
 /**

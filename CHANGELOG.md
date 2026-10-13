@@ -2,6 +2,8 @@
 
 ## ✨ Features
 - ✨ Auto provider selection: a task can ask for a backend instead of naming one — the composer's **Auto** card, `cez task create --runner auto`, `runner: auto` on a workflow step or in an automation definition — and cezar resolves it at launch to the cheapest capable provider and model on the host, then fails over to a similar model on a different provider when that one runs out, bounded by `resources.autoProvider` (`maxFailovers` 3, `maxWaitMinutes` 10). Records keep both the resolved runner and the `auto` request; tasks naming a concrete runner never fail over and keep waiting for their own provider's reset.
+- ✨ Branch naming instructions in Settings → Instructions: task branches are named from the first prompt under your instructions, with a short wait before the fork and a skeleton in the branch cell meanwhile; empty keeps `cez/<id>`. *(@martaradziszewska)*
+- ✨ Project settings regrouped: Agents keeps providers, runner and models; the new Instructions section holds the system prompt, branch naming and prompt templates; the new Tasks section holds base branch, the review gate and live titles. Old prompt-templates links redirect. *(@martaradziszewska)*
 
 # 0.15.0 (2026-10-11)
 

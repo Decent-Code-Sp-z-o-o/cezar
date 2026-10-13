@@ -79,6 +79,25 @@ const cellsOf = (id: string): string[] => [...(tableRow(id)?.querySelectorAll('t
 
 afterEach(cleanup)
 
+describe('TasksOverview — the branch cell', () => {
+  it('shows a skeleton while a started isolated run has no branch yet, a dash otherwise', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'forking', status: 'running' }),
+        run({ id: 'queued', status: 'queued' }),
+        run({ id: 'inplace', status: 'running', worktree: false }),
+        run({ id: 'named', status: 'running', branch: 'feature/fix-login' }),
+      ],
+    })
+    const cell = (id: string) => tableRow(id)?.querySelector('td[data-column-id="branch"]')
+    expect(cell('forking')?.querySelector('[data-slot="branch-skeleton"]')).not.toBeNull()
+    expect(cell('queued')?.querySelector('[data-slot="branch-skeleton"]')).toBeNull()
+    expect(cell('queued')?.textContent).toBe('—')
+    expect(cell('inplace')?.querySelector('[data-slot="branch-skeleton"]')).toBeNull()
+    expect(cell('named')?.textContent).toBe('feature/fix-login')
+  })
+})
+
 describe('TasksOverview — the table', () => {
   it('starts with Branch folded while keeping fixed columns and an in-place restore control', () => {
     const onToggleColumn = vi.fn()

@@ -434,9 +434,13 @@ async function respond(userText, imageCount) {
   // dry-run tests can assert the full apply pipeline.
   if (userText.includes('[cez-namer]')) {
     const numbered = /(?:^|\D)(\d{1,7})(?:\D|$)/.exec(userText);
+    // Branch naming instructions (spec 2026-10-11-branch-naming-instructions): a canned branch
+    // so dry-run tests can assert the fork used it. Only when the prompt carried instructions.
+    const named = userText.includes('Branch naming instructions:');
     const name = JSON.stringify({
       title: 'implementing cr fixes',
       ...(numbered ? { pr: Number(numbered[1]) } : {}),
+      ...(named ? { branch: 'feature/implementing cr fixes' } : {}),
     });
     emit({
       type: 'assistant',

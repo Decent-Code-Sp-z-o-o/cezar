@@ -8,6 +8,8 @@ import {
   ApiError,
   browseFs,
   checkoutProject,
+  createProject,
+  getGithubOwners,
   connectProvider,
   continueRun,
   continueProjectRun,
@@ -66,6 +68,7 @@ import {
   getSkillsUpdate,
   getSelfUpdate,
   getSelfUpdateDevelopment,
+  getTelemetryConsent,
   refreshSelfUpdate,
   setSelfUpdateChannel,
   applySelfUpdate,
@@ -100,6 +103,7 @@ import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
+  CreateProjectInput,
   CreateAgentProfileInput,
   ApiRun,
   HealthResponse,
@@ -404,6 +408,8 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
+  /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
+  githubOwners: ['workspace', 'github-owners'] as const,
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
@@ -434,6 +440,8 @@ export const workspaceQueryKeys = {
   /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
   selfUpdate: ['workspace', 'self-update'] as const,
   selfUpdateDevelopment: ['workspace', 'self-update', 'development'] as const,
+  /** The opt-in telemetry answer via `GET /api/v1/telemetry/consent` — one per machine. */
+  telemetryConsent: ['workspace', 'telemetry-consent'] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
    *  browsed path — `null` is the browse root, whose absolute location only the server knows.
    *  Not scope-led: there is one filesystem behind the workspace, not one per project. */
@@ -849,6 +857,29 @@ export function useCheckoutProject() {
     mutationFn: (input: CheckoutProjectInput) => checkoutProject(input),
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/** Create a new project (`POST /api/projects/create`). Same invalidation and no-retry rule as
+ *  `useCheckoutProject`: a retry would race the server's cleanup and land on the 409, or worse,
+ *  try to create the GitHub repository twice. */
+export function useCreateProject() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateProjectInput) => createProject(input),
+    retry: false,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/** The GitHub accounts (login + orgs) a new repo may belong to. Cached for the session: org
+ *  membership does not change while a dialog is open, and each probe is two `gh api` calls. */
+export function useGithubOwners() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.githubOwners,
+    queryFn: ({ signal }) => getGithubOwners({ signal }),
+    staleTime: 5 * 60_000,
+    retry: false,
   })
 }
 
@@ -1462,6 +1493,16 @@ export function useAgentProfiles() {
   })
 }
 
+/** The opt-in telemetry answer. Read by the consent bar and Settings → Privacy; both write
+ *  through `putTelemetryConsent` and set this cache from the answer. */
+export function useTelemetryConsent() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.telemetryConsent,
+    queryFn: ({ signal }) => getTelemetryConsent({ signal }),
+    staleTime: Infinity,
+    retry: false,
+  })
+}
 export function useSkillsUpdate(projectId: string, enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.skillsUpdate(projectId),

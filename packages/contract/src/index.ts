@@ -26,5 +26,6 @@ export * from './host.ts';
 export * from './tracker.ts';
 export * from './self-update.ts';
 export * from './terminal.ts';
+export * from './telemetry.ts';
 export * from './secrets.ts';
 export * from './e2e.ts';
