@@ -1281,19 +1281,18 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  question only a user debugging "which provider actually served this?" asks, so it belongs
  *  behind the same disclosure as the account rather than in the truncating summary line. */
 function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
-  const { runner, account, model, identity, summary } = useRunEngine(run)
-  const badgeLabel = [runner, account, model].filter(Boolean).join(' - ')
+  const { runner, account, model, modelBadge, identity, summary, requestedAuto, hops, excluded } = useRunEngine(run)
   return (
     <DropdownMenu>
       {/* Icon only: the chat box names the engine in its pills on every state now (run-engine.tsx),
           so the summary here would be the same words twice. The tooltip answers "what ran?" on
           tabs without a chat box, and the menu keeps the labelled breakdown. */}
-      <IconTooltip label={badgeLabel}>
+      <IconTooltip label={summary}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             data-slot="agent-badge"
-            aria-label={badgeLabel}
+            aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${modelBadge}`}
             className="flex shrink-0 items-center rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
@@ -1304,6 +1303,26 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
           runner: {runner}
         </DropdownMenuLabel>
+        {/* The auto request, kept next to the decision it produced (spec 2026-10-12-auto-provider-
+            selection § UI/UX): what the task ASKED for and what the launch picked are two facts,
+            and a run that hopped providers names the hops and the accounts it left behind. */}
+        {requestedAuto ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-request"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            request: auto → {runner}/{model}
+          </DropdownMenuLabel>
+        ) : null}
+        {requestedAuto && hops > 0 ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-failovers"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            failovers: {hops}
+            {excluded.length > 0 ? ` — ${excluded.join(', ')} excluded` : ''}
+          </DropdownMenuLabel>
+        ) : null}
         {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
             cannot be said to have used the discovered account — nothing wrote that down. */}
         {account ? (
@@ -1315,7 +1334,7 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
           </DropdownMenuLabel>
         ) : null}
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          model: {model}
+          model: {modelBadge}
         </DropdownMenuLabel>
         {identity ? (
           <DropdownMenuLabel

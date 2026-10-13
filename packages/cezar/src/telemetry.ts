@@ -1,8 +1,8 @@
 /**
  * Usage telemetry — the ONE module that talks to the telemetry worker.
  *
- * Opt-in: nothing leaves the machine until the user said yes (the cockpit's consent bar,
- * Settings → Privacy, or `cezar telemetry enable`), recorded as `telemetry` in
+ * Opt-in: nothing leaves the machine until the user said yes (Settings → Privacy, or
+ * `cezar telemetry enable`), recorded as `telemetry` in
  * `~/.cezar/config.json`. `CEZ_TELEMETRY=0` / `DO_NOT_TRACK=1` block it even then; no env var
  * can grant it. See docs/telemetry.md. Everything here is
  * fire-and-forget — a 3 s timeout, no retries, never throws, never awaited on a path

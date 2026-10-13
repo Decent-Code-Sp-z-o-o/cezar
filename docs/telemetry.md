@@ -6,15 +6,15 @@ events, no error reports, not even a daily ping — and no install id is created
 
 ## Answering
 
-- **Cockpit** — a bar at the bottom of the main pane asks until you answer; it covers nothing and
-  opens no dialog on its own. *Share usage data* and *Don't share* both record your answer;
-  *Details* opens the full list of what is and isn't sent.
-- **Settings → Privacy** — the same answer as a switch, at any time.
+- **Settings → Privacy** — the answer as a switch, at any time.
 - **Terminal** — `cezar telemetry enable`, `cezar telemetry disable`, `cezar telemetry status`.
   A headless install that nobody answers for sends nothing.
 
+The cockpit never asks on its own — an unanswered machine simply stays silent.
+
 The answer is stored per machine in `~/.cezar/config.json` (`telemetry`). When what we collect
-changes, the policy version goes up and cezar asks again; an earlier yes does not carry over.
+changes, the policy version goes up and your answer is treated as withdrawn: Settings → Privacy
+shows the switch as off until you opt in again; an earlier yes does not carry over.
 
 ## What is sent
 

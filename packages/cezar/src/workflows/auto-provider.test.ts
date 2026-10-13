@@ -128,7 +128,10 @@ describe('auto provider selection', () => {
     });
     const record = manager.startRun(workflow, { task: 'sort the inbox', runner: 'auto', worktree: false });
 
-    await waitFor(() => store.getRun(record.id)?.runner !== undefined);
+    // Wait on the LIFECYCLE LINE, not on `runner !== undefined`: the bridge writes the record
+    // and appends the line in that order, so the line's arrival proves the resolution write
+    // landed whole — polling the field alone can release mid-update on a loaded host.
+    await waitFor(() => lifecycleMessages(record.id).some((message) => message.startsWith('auto -> ')));
     const resolved = store.getRun(record.id);
     // haiku is the tier-1 pick; the record carries the CONCRETE runner plus the request echo and
     // the pinned model — never 'auto' in `runner` (Q2).
@@ -142,7 +145,7 @@ describe('auto provider selection', () => {
     manager = new RunManager(store, repoRoot, { providerAvailability: () => Promise.resolve({ runners: [] }) });
     const record = manager.startRun(workflow, { task: 'sort the inbox', runner: 'auto', worktree: false });
 
-    await waitFor(() => store.getRun(record.id)?.runner !== undefined);
+    await waitFor(() => lifecycleMessages(record.id).some((message) => message.includes('nothing available')));
     const resolved = store.getRun(record.id);
     expect(resolved?.runner).toBe('claude'); // the config default — the run is attempted anyway
     expect(resolved?.runnerRequest).toBe('auto');
@@ -170,6 +173,16 @@ describe('auto provider selection', () => {
     expect(hopped?.error).toContain('continue failed');
     // No wait was armed — the failover replaced it.
     expect(hopped?.autoResumeAt).toBeUndefined();
+    // The hop's opening line is the ENGINE's prompt: stamped so the thread never renders it as a
+    // message the user sent, with the text still verbatim for the agent.
+    const opening = store
+      .readEvents(record.id)
+      .find((event) => event.type === 'user-message' && event.stepId === 'continue-1');
+    expect(opening?.engineAuthored).toBe(true);
+    // The queued hop re-attaches the task text (#472); the engine prompt leads verbatim.
+    expect(String(opening?.text).startsWith(
+      'The provider this task was running on hit its usage limit, so the task is continuing on a different provider. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where it left off.',
+    )).toBe(true);
   }, 90_000);
 
   it('waits instead when the reset is inside maxWaitMinutes', async () => {
@@ -219,7 +232,7 @@ describe('auto provider selection', () => {
     });
     const record = manager.startRun(workflow, { task: 'mock:limit ship it', runner: 'auto', worktree: false });
 
-    await waitFor(() => store.getRun(record.id)?.runner !== undefined);
+    await waitFor(() => lifecycleMessages(record.id).some((message) => message.includes('switched off')));
     expect(store.getRun(record.id)?.runner).toBe('claude');
     expect(lifecycleMessages(record.id).some((message) => message.includes('switched off'))).toBe(true);
     await settle(record.id);

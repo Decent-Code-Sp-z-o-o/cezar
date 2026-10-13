@@ -36,6 +36,8 @@ const MAX_MONITORING_MAX = 16
 const IDLE_TIMEOUT_MAX = 1440
 const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
+const FAILOVERS_MAX = 12
+const WAIT_MINUTES_MAX = 240
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
 const MEMORY_MIN_MB = 256
 
@@ -91,6 +93,9 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   // Shipped ON: a server that predates the key answers without it, and reading that as "off"
   // would silently disable the feature on the one client that cannot tell the difference.
   const autoResume = config.resources.autoResumeOnUsageLimit ?? true
+  // Same shipped-ON reasoning (spec 2026-10-12-auto-provider-selection, Q6 defaults).
+  const autoProvider = config.resources.autoProvider
+  const autoProviderEnabled = autoProvider?.enabled ?? true
   const saveAutoResume = (on: boolean) => save.mutate(
     { resources: { autoResumeOnUsageLimit: on } },
     {
@@ -256,6 +261,57 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         </select>
         <p className="text-[11px] text-soft-foreground">
           Applies to Claude, Codex and OpenCode — whenever the provider says when the limit lifts.
+        </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Auto provider selection"
+        hint="A task set to Auto picks the cheapest capable provider at launch, and when that provider runs out the run continues on a similar model from a different one instead of waiting the window out. A task naming a specific backend never hops."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Auto provider selection"
+            data-slot="resources-auto-provider"
+            value={autoProviderEnabled ? 'on' : 'off'}
+            disabled={save.isPending}
+            onChange={(event) => save.mutate(
+              { resources: { autoProvider: { enabled: event.target.value === 'on' } } },
+              {
+                onSuccess: () => toast(
+                  event.target.value === 'on'
+                    ? 'Auto tasks pick the cheapest capable provider and fail over on exhaustion'
+                    : 'Auto tasks use the default backend and never fail over',
+                ),
+              },
+            )}
+            className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+          <IntegerStepper
+            aria-label="Failover hops per run"
+            data-slot="resources-auto-provider-max-failovers"
+            value={autoProvider?.maxFailovers ?? 3}
+            min={0}
+            max={FAILOVERS_MAX}
+            onCommit={(maxFailovers) => save.mutateAsync({ resources: { autoProvider: { maxFailovers: maxFailovers ?? 0 } } })}
+          />
+          <span className="text-xs text-soft-foreground">hops</span>
+          <IntegerStepper
+            aria-label="Fail over only when the reset is further away than"
+            data-slot="resources-auto-provider-max-wait"
+            value={autoProvider?.maxWaitMinutes ?? 10}
+            min={0}
+            max={WAIT_MINUTES_MAX}
+            onCommit={(maxWaitMinutes) => save.mutateAsync({ resources: { autoProvider: { maxWaitMinutes: maxWaitMinutes ?? 0 } } })}
+          />
+          <span className="text-xs text-soft-foreground">min reset</span>
+        </div>
+        <p className="text-[11px] text-soft-foreground">
+          Hops cap how many provider changes one run may spend; a reset closer than the minute
+          threshold is cheaper to wait out than to re-read a whole worktree for. Applied without a
+          restart.
         </p>
       </SettingsField>
 

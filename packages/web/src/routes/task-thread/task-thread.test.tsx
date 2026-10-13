@@ -359,6 +359,36 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
   })
 
+  it('running with model auto → the model chip names what is serving beside auto', () => {
+    // The ask stayed auto; the launch (or a step identity) already knows the serving id — the
+    // chip must keep "auto" visible and append the model (`auto - Qwen3.8-27B`), not replace it.
+    renderView(
+      <ThreadView
+        run={run('running', {
+          runner: 'cursor',
+          modelIdentity: 'openai/Qwen3.8-27B',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const modelChip = document.querySelector('[data-slot="run-engine-model"]') as HTMLElement
+    expect(modelChip?.textContent).toBe('auto - Qwen3.8-27B')
+  })
+
+  it('running with model auto and a resolvedModel pin → same auto - <model> chip', () => {
+    renderView(
+      <ThreadView
+        run={run('running', {
+          runner: 'claude',
+          runnerRequest: 'auto',
+          resolvedModel: 'haiku',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="run-engine-model"]')?.textContent).toBe('auto - haiku')
+  })
+
   it('a continuable run swaps the read-only engine for the editable pills', async () => {
     renderView(
       <ThreadView
