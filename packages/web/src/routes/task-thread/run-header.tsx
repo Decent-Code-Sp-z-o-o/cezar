@@ -1282,17 +1282,18 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  behind the same disclosure as the account rather than in the truncating summary line. */
 function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
   const { runner, account, model, identity, summary } = useRunEngine(run)
+  const badgeLabel = [runner, account, model].filter(Boolean).join(' - ')
   return (
     <DropdownMenu>
       {/* Icon only: the chat box names the engine in its pills on every state now (run-engine.tsx),
           so the summary here would be the same words twice. The tooltip answers "what ran?" on
           tabs without a chat box, and the menu keeps the labelled breakdown. */}
-      <IconTooltip label={summary}>
+      <IconTooltip label={badgeLabel}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             data-slot="agent-badge"
-            aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
+            aria-label={badgeLabel}
             className="flex shrink-0 items-center rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
