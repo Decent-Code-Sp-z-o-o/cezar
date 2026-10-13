@@ -218,6 +218,23 @@ describe('Global settings → Resources', () => {
     expect(puts()[0]?.body).toEqual({ resources: { autoResumeOnUsageLimit: false } })
   })
 
+  it('shows auto provider selection with its Q6 defaults and saves per-key', async () => {
+    serve({ autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 } })
+    renderResources()
+    const select = (await screen.findByLabelText('Auto provider selection')) as HTMLSelectElement
+    // The shipped defaults (spec 2026-10-12-auto-provider-selection, Q6): on, three hops, and a
+    // ten-minute near-reset threshold below which waiting beats re-reading a worktree.
+    expect(select.value).toBe('on')
+    expect(screen.getByLabelText('Failover hops per run')).toBeTruthy()
+    expect(screen.getByLabelText('Fail over only when the reset is further away than')).toBeTruthy()
+
+    // The workspace PUT merges autoProvider per key, so each control saves independently and a
+    // flip of one never rewrites the others.
+    fireEvent.change(select, { target: { value: 'off' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { autoProvider: { enabled: false } } })
+  })
+
   it('saves a memory limit, and an empty field clears it back to "no limit"', async () => {
     serve({ memoryLimitMb: null })
     renderResources()
