@@ -447,7 +447,7 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** The opt-in telemetry answer (`~/.cezar/config.json`), behind the consent bar and
+/** The opt-in telemetry answer (`~/.cezar/config.json`), shown and written by
  *  Settings → Privacy. */
 export async function getTelemetryConsent(opts?: ReadOptions): Promise<TelemetryConsentPayload> {
   return unwrap(await cez.api.v1.telemetry.consent.$get({}, init(opts)), '/telemetry/consent')
