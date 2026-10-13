@@ -1,16 +1,39 @@
 import * as React from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowUpRightIcon } from 'lucide-react'
 
-import { useTelemetryConsent } from '@/api/queries'
-import { useSetTelemetryConsent } from '@/components/telemetry-consent'
+import { putTelemetryConsent } from '@/api/client'
+import { useTelemetryConsent, workspaceQueryKeys } from '@/api/queries'
 import { Switch } from '@/components/ui/switch'
-import { TELEMETRY_DOC_URL } from '@/lib/telemetry-consent'
+import { toast } from '@/components/ui/toaster'
+import { resetSid } from '@/lib/sid'
+
+/** cezar's own write-up of what is sent and what never leaves the machine (docs/telemetry.md). */
+const TELEMETRY_DOC_URL = 'https://github.com/open-mercato/cezar/blob/main/docs/telemetry.md'
 
 /**
- * Settings → Privacy: the standing answer to the consent bar (docs/telemetry.md). GLOBAL —
- * consent belongs to the machine's `~/.cezar/config.json`, not to a repo. Off until switched on;
- * switching off deletes the install id.
+ * Record an answer and put the server's reply in the cache every reader shares. Settings →
+ * Privacy is the only place the cockpit offers the choice: opting in happens here or through
+ * `cezar telemetry enable`, nowhere unprompted.
  */
+function useSetTelemetryConsent() {
+  const queryClient = useQueryClient()
+  return React.useCallback(
+    async (consent: 'granted' | 'denied') => {
+      try {
+        const next = await putTelemetryConsent({ consent })
+        queryClient.setQueryData(workspaceQueryKeys.telemetryConsent, next)
+        if (consent === 'denied') resetSid()
+        return true
+      } catch (error) {
+        toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+        return false
+      }
+    },
+    [queryClient],
+  )
+}
+
 export function PrivacySection() {
   const consent = useTelemetryConsent()
   const setConsent = useSetTelemetryConsent()
