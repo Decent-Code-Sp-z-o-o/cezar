@@ -1281,7 +1281,7 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  question only a user debugging "which provider actually served this?" asks, so it belongs
  *  behind the same disclosure as the account rather than in the truncating summary line. */
 function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
-  const { runner, account, model, identity, summary, requestedAuto, hops, excluded } = useRunEngine(run)
+  const { runner, account, model, modelBadge, identity, summary, requestedAuto, hops, excluded } = useRunEngine(run)
   return (
     <DropdownMenu>
       {/* Icon only: the chat box names the engine in its pills on every state now (run-engine.tsx),
@@ -1292,7 +1292,7 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
           <button
             type="button"
             data-slot="agent-badge"
-            aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
+            aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${modelBadge}`}
             className="flex shrink-0 items-center rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
@@ -1334,7 +1334,7 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
           </DropdownMenuLabel>
         ) : null}
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          model: {model}
+          model: {modelBadge}
         </DropdownMenuLabel>
         {identity ? (
           <DropdownMenuLabel

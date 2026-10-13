@@ -1512,6 +1512,17 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(within(menu).getByText('model: auto')).not.toBeNull()
   })
 
+  it('the agent badge names the serving model beside auto when identity is known', async () => {
+    stubFetch()
+    renderHeader(run('running', { runner: 'cursor', modelIdentity: 'openai/Qwen3.8-27B' }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const badge = within(meta).getByRole('button', { name: /Agent: cursor, model auto - Qwen3\.8-27B/ })
+    expect(await tooltipOf(badge)).toBe('cursor · auto - Qwen3.8-27B')
+    fireEvent.pointerDown(badge)
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByText('model: auto - Qwen3.8-27B')).not.toBeNull()
+  })
+
   it('offers the next-continuation engine picker inside the existing agent badge', async () => {
     stubFetch()
     renderHeader(

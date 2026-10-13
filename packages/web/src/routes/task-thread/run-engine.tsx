@@ -3,6 +3,36 @@ import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun } from '@open-mercato/cezar-api-c
 import { PickerPill } from '@/components/picker-pill'
 import { modelsForRunner } from '@/routes/new-task-form'
 
+/** Bare model id from a canonical `provider/model` identity (or the raw string if it is not one). */
+export function modelNameFromIdentity(identity: string | undefined): string | undefined {
+  if (!identity) return undefined
+  const slash = identity.indexOf('/')
+  return slash > 0 ? identity.slice(slash + 1) : identity
+}
+
+/**
+ * The model a run with no pinned `model` is actually being served by — launch pin first, then
+ * the canonical identity on the record, then the latest step that recorded one (a Continue can
+ * rewrite the step without the run-level field having landed yet).
+ */
+export function servingModelForAuto(run: ApiRun): string | undefined {
+  if (run.resolvedModel) return run.resolvedModel
+  const fromRun = modelNameFromIdentity(run.modelIdentity)
+  if (fromRun) return fromRun
+  const stepIdentity = [...run.steps].reverse().find((step) => step.modelIdentity)?.modelIdentity
+  return modelNameFromIdentity(stepIdentity)
+}
+
+/**
+ * Label for the model chip / badge when the composer left the model on auto: keep the "auto"
+ * request visible and name what is serving (`auto - Qwen3.8-27B`). A pinned model stays as-is.
+ */
+export function autoModelBadgeLabel(askedModel: string | undefined, serving: string | undefined): string {
+  if (askedModel) return askedModel
+  if (serving && serving !== 'auto') return `auto - ${serving}`
+  return 'auto'
+}
+
 /**
  * Which agent, account and model a run is ON — the one resolution the header's agent badge and
  * the composer's read-only engine pills both read, so the two can never name different engines.
@@ -18,9 +48,11 @@ export function useRunEngine(run: ApiRun) {
   const config = useConfig()
   const profiles = useAgentProfiles()
   const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
-  // The model the run actually asked its backend for: the composer's pick, or — on an auto run —
-  // the model the launch pinned (`resolvedModel`). Absent on both counts reads "auto".
+  // What the composer pinned (absent = auto). The serving id is separate so the badge can keep
+  // naming the ask while revealing what launched / what the backend reported.
+  const serving = servingModelForAuto(run)
   const model = run.model ?? run.resolvedModel ?? 'auto'
+  const modelBadge = autoModelBadgeLabel(run.model, serving)
   // The auto REQUEST (spec 2026-10-12-auto-provider-selection): the record keeps the ask and the
   // decision as two things — `runnerRequest` is the literal `'auto'`, `runner`/`resolvedModel`
   // the launch's answer, `failoverCount`/`excludedProviders` what the exhaustion cost. The badge
@@ -41,17 +73,24 @@ export function useRunEngine(run: ApiRun) {
       // A deleted account still names the folder this run's sessions live in, so the id is shown
       // rather than swallowed — "gone" is the useful half of that answer.
       : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
-  // The canonical `provider/model` the run actually resolved to (#405), shown only when it says
-  // something `model` does not (#546). Absent on pre-#405 records and skipped when it merely
-  // repeats `model` — an identity nothing wrote down is not one a reader may invent.
-  const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
+  // Prefer the run-level identity; fall back to the latest step so a live Continue still answers
+  // "what is serving?" before the run field is rewritten.
+  const identityRaw =
+    run.modelIdentity
+    ?? [...run.steps].reverse().find((step) => step.modelIdentity)?.modelIdentity
+  // The canonical `provider/model` (#405/#546): show only when it adds something the model / auto
+  // badge line does not already say. Absent on pre-#405 records.
+  const identity =
+    identityRaw && identityRaw !== model && identityRaw !== modelBadge ? identityRaw : undefined
   // `auto → claude/haiku`, and after a failover `auto → codex/… (hop 1)` — with the exhausted
   // providers named, since a hop is exactly the kind of decision a reader wants the why of. The
   // cost tier stays in the thread's lifecycle line; the badge does not re-derive pricing.
+  // Non-auto runs use the model badge label so a live "auto" chip that already names the serving
+  // model does not read as a bare "auto" in the tooltip.
   const summary = requestedAuto
     ? `auto → ${runner}/${model}${hops > 0 ? ` (hop ${hops})` : ''}${excluded.length > 0 ? ` — ${excluded.join(', ')} excluded` : ''}`
-    : [runner, account, model].filter(Boolean).join(' · ')
-  return { runner, account, model, identity, summary, requestedAuto, hops, excluded }
+    : [runner, account, modelBadge].filter(Boolean).join(' · ')
+  return { runner, account, model, modelBadge, identity, summary, requestedAuto, hops, excluded }
 }
 
 /**
@@ -63,11 +102,18 @@ export function useRunEngine(run: ApiRun) {
  */
 export function RunEnginePills({ run }: { run: ApiRun }) {
   const engine = useRunEngine(run)
-  // The catalog only turns the pinned id into its display name ("opus" → "Opus 5.5"), so the chip
-  // reads exactly as the editable one will once the session closes.
+  // The catalog only turns the pinned / serving id into its display name ("opus" → "Opus 5.5"), so
+  // the chip reads exactly as the editable one will once the session closes — and an auto ask that
+  // has a serving id keeps the "auto - …" shape with the catalog's friendly name on the right.
   const catalog = useRunnerModels(engine.runner)
-  const models = modelsForRunner(engine.runner, catalog.data, [run.model])
-  const modelLabel = models.find((preset) => preset.id === engine.model)?.label ?? engine.model
+  const models = modelsForRunner(engine.runner, catalog.data, [run.model, run.resolvedModel])
+  const serving = servingModelForAuto(run)
+  const servingLabel = serving
+    ? (models.find((preset) => preset.id === serving)?.label ?? serving)
+    : undefined
+  const modelLabel = run.model
+    ? (models.find((preset) => preset.id === run.model)?.label ?? run.model)
+    : autoModelBadgeLabel(undefined, servingLabel)
   const hint = 'The session’s engine — pick another when you continue it'
   return (
     <div data-slot="run-engine" className="flex flex-wrap items-center gap-1.5">
