@@ -476,6 +476,10 @@ export interface RunEvent {
   ts: string;
   stepId?: string;
   type: string;
+  /** `true` on a `user-message` the engine itself authored (restart recovery, usage-limit
+   *  resume, usage-limit failover) — mirrored from the contract's `runEventSchema`, which pins
+   *  this interface two-way in `api-types.test.ts`. */
+  engineAuthored?: boolean | undefined;
   [key: string]: unknown;
 }
 
