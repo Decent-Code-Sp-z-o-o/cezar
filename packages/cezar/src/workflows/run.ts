@@ -1168,6 +1168,9 @@ interface PendingContinuation {
   /** Attachments the user pasted into the follow-up composer — images to view, files (#950) to
    *  be given the path of. Persisted when the continuation actually opens, not here. */
   images: PastedContent[];
+  /** The engine wrote the prompt itself (restart recovery re-queuing an interrupted
+   *  continuation) — the thread must not render it as a message the user sent. */
+  engineAuthored?: boolean;
 }
 
 /** What re-reading a message's persisted attachments yields: viewable blocks for the images, and
@@ -1858,6 +1861,7 @@ export class RunManager {
               hydrated.persistedImages,
               hydrated.persistedAttachments,
               ownerToken,
+              hydrated.engineAuthored === true,
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
@@ -1931,6 +1935,8 @@ export class RunManager {
         backend,
         prompt: RESTART_CONTINUATION_PROMPT,
         images: [],
+        // The engine's own resume prompt: the transcript must not read it as something the user sent.
+        engineAuthored: true,
       });
       this.queue.push(run.id);
       this.store.appendEvent(run.id, {
@@ -2136,6 +2142,8 @@ export class RunManager {
         run.id,
         {
           text: RESTART_CONTINUATION_PROMPT,
+          // The engine's own resume prompt — never rendered as a message the user sent.
+          engineAuthored: true,
         },
         true,
       );
@@ -2988,7 +2996,13 @@ export class RunManager {
       const failoverCount = (latest.failoverCount ?? 0) + 1;
       const resumed = this.continueRun(
         runId,
-        { text: AUTO_FAILOVER_PROMPT, runner: selection.runner, model: selection.model ?? '' },
+        {
+          text: AUTO_FAILOVER_PROMPT,
+          runner: selection.runner,
+          model: selection.model ?? '',
+          // The engine's own failover prompt — never rendered as a message the user sent.
+          engineAuthored: true,
+        },
         true,
       );
       if (!resumed.ok) {
@@ -3047,7 +3061,7 @@ export class RunManager {
     const attempts = (run.autoResumeAttempts ?? 0) + 1;
     // `continueRun` retires the pending resume (timer + record fields) on the way in — this is a
     // resume, not a user turn, so the counter is put back straight after.
-    const resumed = this.continueRun(runId, { text: AUTO_RESUME_PROMPT }, true);
+    const resumed = this.continueRun(runId, { text: AUTO_RESUME_PROMPT, engineAuthored: true }, true);
     if (!resumed.ok) {
       // Refusals happen before `continueRun` retires anything, so the deadline is still on the
       // record — and a deadline in the past is a promise the cockpit keeps displaying and the
@@ -4012,6 +4026,10 @@ export class RunManager {
       /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
        *  account the run is already on. */
       agentProfile?: string;
+      /** The engine, not the user, wrote `text` (restart recovery, usage-limit resume, failover).
+       *  The agent still receives it verbatim; only the transcript's attribution changes — the
+       *  `user-message` line is stamped `engineAuthored` so the thread renders no user bubble. */
+      engineAuthored?: boolean;
     } = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
      *  continuations are queued; an explicit user Continue remains immediate. */
@@ -4132,6 +4150,7 @@ export class RunManager {
         backend: opts.runner ?? run.runner ?? 'claude',
         prompt,
         images,
+        ...(opts.engineAuthored ? { engineAuthored: true } : {}),
       });
       this.queue.push(runId);
       this.store.updateRun(runId, {
@@ -4154,6 +4173,8 @@ export class RunManager {
       undefined,
       undefined,
       ownerToken,
+      // A user Continue, typed follow-up or ask reply: rendered as the user's turn, as always.
+      opts.engineAuthored === true,
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -4179,6 +4200,10 @@ export class RunManager {
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
     ownerToken?: symbol,
+    /** The engine wrote the opening prompt itself (restart recovery, usage-limit resume,
+     *  failover): the `user-message` line is stamped so the thread renders no user bubble. The
+     *  agent still receives the prompt verbatim — nothing below reads this but the one append. */
+    engineAuthored = false,
   ): Promise<void> {
     const effectiveOwnerToken = ownerToken ?? Symbol('run-owner');
     // Continuation runs in the task's worktree when it still exists (spec
@@ -4315,6 +4340,10 @@ export class RunManager {
       text: prompt,
       imageCount: openingImages.filter((b) => b.type === 'image').length,
       ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
+      // The engine's own continuation prompts (restart recovery, usage-limit resume, failover)
+      // open the turn like any other, but the thread must not show them as bubbles the user
+      // typed — nor let one answer a pending CEZ:ASK (#473).
+      ...(engineAuthored ? { engineAuthored: true } : {}),
     });
 
     let stepCost = 0;

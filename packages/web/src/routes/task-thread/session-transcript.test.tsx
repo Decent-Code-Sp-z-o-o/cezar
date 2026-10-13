@@ -223,6 +223,26 @@ describe('transcript adapters and row building', () => {
     })
 
     /**
+     * An engine-authored continuation prompt (restart recovery, usage-limit resume, failover)
+     * opens its turn with NO user message — the fold attaches none — so the transcript renders
+     * no bubble for it, while the turn still dates itself from `startedAt` and closes with its
+     * own turn-time row. The engine prompt is the transcript row that never was.
+     */
+    it('renders no bubble for an engine-opened turn, which still dates and closes itself', () => {
+      const resumedNextDay = mainTranscriptSections(run({ task: 'Build it' }), {
+        turns: [
+          turn('turn-1', { user: localIso(2026, 7, 31, 9), completedAt: localIso(2026, 7, 31, 9, 5) }),
+          turn('turn-2', { startedAt: localIso(2026, 8, 1, 9), completedAt: localIso(2026, 8, 1, 9, 2) }),
+        ],
+      } as ThreadState)
+      const rowKeys = buildTranscriptRows(resumedNextDay, 'r1').map((r) => r.key)
+      expect(rowKeys.filter((key) => key.endsWith(':user'))).toEqual(['turn-1:user'])
+      expect(rowKeys).toContain('turn-2:day-separator')
+      expect(rowKeys).toContain('turn-2:turn-2-answer')
+      expect(rowKeys).toContain('turn-2:turn-time')
+    })
+
+    /**
      * The stack renders directly under the task bubble but is queued LAST: a message stacked onto
      * a run that was continued days later is NEWER than the whole transcript beneath it. Letting
      * it move the day cursor put an "Aug 1" rule over July turns and, because the cursor only ever
