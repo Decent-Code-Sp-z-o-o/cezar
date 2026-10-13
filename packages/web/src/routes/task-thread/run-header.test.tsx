@@ -1257,7 +1257,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     // model produced this?" unanswerable without knowing to click it, which is the one question the
     // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
     // labelled breakdown.
-    const badge = within(meta).getByRole('button', { name: /codex - gpt-5.2-codex/ })
+    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
     // Icon only — the chat box's engine pills carry the words.
     expect(badge.textContent).toBe('')
     // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
@@ -1506,7 +1506,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /opencode - auto/ }))
+    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: opencode/ }))
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByText('runner: opencode')).not.toBeNull()
     expect(within(menu).getByText('model: auto')).not.toBeNull()
@@ -1560,7 +1560,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(run('done', { runner: undefined }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = await within(meta).findByRole('button', { name: /codex - auto/ })
+    const badge = await within(meta).findByRole('button', { name: /Agent: codex, model auto/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
@@ -1593,9 +1593,9 @@ describe('meta line, tabs, pill and resume hint', () => {
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = await within(meta).findByRole('button', { name: /claude - Klaudiusz - opus/ })
+      const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
       // Icon only; the tooltip still names it in full.
-      expect(await tooltipOf(badge)).toBe('claude - Klaudiusz - opus')
+      expect(await tooltipOf(badge)).toBe('claude · Klaudiusz · opus')
     })
 
     it('prefers what RAN over what the composer asked for', async () => {
@@ -1616,7 +1616,7 @@ describe('meta line, tabs, pill and resume hint', () => {
       withAccounts()
       renderHeader(run('done', { runner: 'claude', steps: [step({ sessionId: 'sess-1' })] }))
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /claude - auto/ })
+      await within(meta).findByRole('button', { name: /Agent: claude, model auto/ })
       expect(meta.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
     })
 
@@ -1689,9 +1689,9 @@ describe('meta line, tabs, pill and resume hint', () => {
       stubFetch()
       renderHeader(run('running', { runner: 'claude', model: 'opus' }), undefined, undefined, undefined, tab)
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = within(meta).getByRole('button', { name: /claude - opus/ })
+      const badge = within(meta).getByRole('button', { name: /Agent: claude, model opus/ })
       expect(badge.textContent).toBe('')
-      expect(await tooltipOf(badge)).toBe('claude - opus')
+      expect(await tooltipOf(badge)).toBe('claude · opus')
     },
   )
 
@@ -1699,10 +1699,10 @@ describe('meta line, tabs, pill and resume hint', () => {
     stubFetch()
     renderGitTab(run('done', { runner: 'claude' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = within(meta).getByRole('button', { name: /claude - auto/ })
+    const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
     // Named like any other agent — claude being the default is not a reason to leave "what
     // produced this?" unanswered.
-    expect(badge.getAttribute('aria-label')).toBe('claude - auto')
+    expect(badge.getAttribute('aria-label')).toBe('Agent: claude, model auto')
   })
 
   it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {
