@@ -233,14 +233,16 @@ function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionS
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
     .filter((count): count is string => count !== undefined);
 
-  // OpenCode 2.x replaced the summary with one row per stored credential, with the literal
-  // `stored` state in the final column. Keep this shape deliberately narrow: a successful empty
-  // response is the valid no-credentials answer, while any other output without either the 1.x
-  // summary or 2.x rows remains inconclusive rather than being guessed as disconnected.
+  // OpenCode 2.x replaced the summary with one row per credential, whose final column is the
+  // source: `stored` (auth.json) or `environment` (a provider env var the CLI can see — live
+  // v2.0.28 prints `openai  openai_api_key  environment`). Keep this shape deliberately narrow:
+  // a successful empty response is the valid no-credentials answer, while any other output
+  // without either the 1.x summary or 2.x rows remains inconclusive rather than being guessed
+  // as disconnected.
   if (storedSummaries.length === 0) {
     if (lines.length === 0) return 'disconnected';
-    const storedRows = lines.filter((line) => /^.+\s{2,}.+\s+stored$/.test(line));
-    return storedRows.length === lines.length && storedRows.length > 0 ? 'connected' : null;
+    const credentialRows = lines.filter((line) => /^.+\s{2,}.+\s+(?:stored|environment)$/.test(line));
+    return credentialRows.length === lines.length && credentialRows.length > 0 ? 'connected' : null;
   }
   if (storedSummaries.length !== 1) return null;
   const storedCount = Number(storedSummaries[0]);

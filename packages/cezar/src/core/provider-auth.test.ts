@@ -399,6 +399,25 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
   });
 
+  it.each([
+    [
+      'mixed stored and environment rows (live v2.0.28 output)',
+      ['Ollama  Ollama                      stored', 'OpenAI  OPENAI_API_KEY              environment'].join('\n'),
+    ],
+    [
+      'environment rows only',
+      ['OpenAI  OPENAI_API_KEY              environment', 'Anthropic  ANTHROPIC_API_KEY        environment'].join('\n'),
+    ],
+  ])('recognizes OpenCode 2.x environment credential rows: %s', async (_case, stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout, stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
+  });
+
   it('recognizes an OpenCode 2.x successful empty list as disconnected', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'opencode'
