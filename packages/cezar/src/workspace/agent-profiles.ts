@@ -53,6 +53,9 @@ const PROVIDER_HOME: Record<ProviderId, (home: ReturnType<typeof agentHomePaths>
   pi: (home) => home.claude,
   junie: (home) => home.junie,
   copilot: (home) => home.copilot,
+  // Not an account like the others — the server is local and anonymous — but `~/.ollama` is
+  // the real home, and "discovered" is exactly what it is.
+  ollama: (home) => home.ollama,
 };
 
 /**

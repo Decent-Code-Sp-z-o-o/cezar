@@ -78,6 +78,14 @@ describe('automation schemas', () => {
     expect(parsed.intervalSeconds).toBe(300);
     expect(parsed.filters).toMatchObject({ lookbackDays: 7, maxRecords: 25 });
   });
+
+  it('accepts runner auto in a task and stores it verbatim, refusing anything else unknown', () => {
+    // spec 2026-10-12-auto-provider-selection Q2: `auto` is an intake value, resolved at launch
+    // by the server — the definition carries the request exactly as written.
+    const parsed = automationDefinitionSchema.parse({ ...definition, task: { ...definition.task, runner: 'auto' } });
+    expect(parsed.task.runner).toBe('auto');
+    expect(automationDefinitionSchema.safeParse({ ...definition, task: { ...definition.task, runner: 'browser' } }).success).toBe(false);
+  });
 });
 
 describe('automation schemas — kinds (spec 2026-09-14)', () => {

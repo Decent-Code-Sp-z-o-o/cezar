@@ -96,12 +96,26 @@ export interface SocketHub {
   /** Start accepting `WS_PATH` upgrades on `server`. `verifyUpgrade` is the
    *  request-origin guard — `false` answers 403 before the handshake, otherwise
    *  its `trusted` flag decides which topics the connection may read. Boot-time
-   *  wiring like `registerTopic`: attaching twice throws. */
-  attach(server: UpgradeCapableServer, verifyUpgrade: (req: IncomingMessage) => WsUpgradeVerdict): void;
+   *  wiring like `registerTopic`: attaching twice throws.
+   *
+   *  `delegate` (terminal hub, spec 2026-10-10-terminal-tab): exactly ONE
+   *  `upgrade` listener may route paths — Node runs every listener on the same
+   *  event, so a second listener cannot safely coexist with this one. A path
+   *  that is not `WS_PATH` goes to the delegate first; `true` claims it
+   *  (handled, including its own rejections), `false` destroys the socket as
+   *  this listener always has. */
+  attach(
+    server: UpgradeCapableServer,
+    verifyUpgrade: (req: IncomingMessage) => WsUpgradeVerdict,
+    delegate?: UpgradeDelegate,
+  ): void;
   /** Stop publishers, terminate clients, clear timers. Idempotent; also runs
    *  on the attached server's own `close`. */
   close(): void;
 }
+
+/** Claims a non-bus upgrade path — see `SocketHub.attach`. */
+export type UpgradeDelegate = (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
 
 interface TopicState {
   publisher: TopicPublisher;
@@ -242,7 +256,7 @@ export function createSocketHub(options: SocketHubOptions = {}): SocketHub {
       };
     },
 
-    attach(server, verifyUpgrade) {
+    attach(server, verifyUpgrade, delegate) {
       // Boot-time wiring like `registerTopic`, so a second call is a programming
       // error rather than something to absorb: it would install a second
       // `upgrade` listener and orphan the first heartbeat interval (`close`
@@ -253,8 +267,11 @@ export function createSocketHub(options: SocketHubOptions = {}): SocketHub {
         // only there to satisfy URL parsing of a relative reference.
         const pathname = new URL(req.url ?? '', 'http://localhost').pathname;
         if (pathname !== WS_PATH) {
-          // With an `upgrade` listener installed, Node no longer auto-destroys
-          // unhandled upgrades — do it explicitly or the socket leaks.
+          // The delegate (terminal hub when wired) claims foreign paths by
+          // returning true. Anything unclaimed is destroyed — with an
+          // `upgrade` listener installed, Node no longer auto-destroys
+          // unhandled upgrades, so this must stay explicit or the socket leaks.
+          if (delegate?.(req, socket, head)) return;
           socket.destroy();
           return;
         }

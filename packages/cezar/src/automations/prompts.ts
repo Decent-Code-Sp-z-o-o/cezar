@@ -48,7 +48,7 @@ A GitHub poll:
     "prompt": "Review pull request #{{github.number}} ({{github.title}}) at {{github.url}}: read the diff, run the tests, and post your findings as a review.",
     "workflow": "quick-task",                        // a workflow name — OR inline "steps", never both
     "steps": [{ "id": "task", "skill": "om-auto-review-pr", "prompt": "{{task}}" }],  // to run a skill: one agent step naming it
-    "runner": "claude",                              // optional: ${RUNNER_IDS.join(' | ')}
+    "runner": "claude",                              // optional: ${RUNNER_IDS.join(' | ')} | auto
     "agentProfile": "work",                          // optional: an agent account id of that runner; omitted = the project's selection at launch
     "model": "sonnet",                               // optional
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match
@@ -62,7 +62,8 @@ A GitHub poll:
   }
 }
 
-A tracker event poll uses the configured project Jira/Linear connection. Use the options endpoint
+A tracker event poll uses the configured project tracker connection (Jira, Linear, or the local
+file-backed backlog). Use the options endpoint
 GET /api/v1/p/:projectId/tracker/automation-options to obtain supported events, association and
 status/label IDs. Do not invent unsupported capabilities. Replace the sample association and status
 ID below with the exact values returned by options, then create via automation create --file:
@@ -89,7 +90,9 @@ Use optional trackerTrigger.requiredLabels for an ALL-of exact, case-sensitive l
 For supported label events use trackerTrigger.changedLabelIds. Never use top-level GitHub events
 or filters.status for tracker triggers. The legacy filters key "status" is read-only compatibility; such definitions need explicit event setup.
 Jira offers created/status events; Jira label events and Linear history events remain unavailable
-until their history completeness is verified. Linear currently offers issue.opened.
+until their history completeness is verified. Linear currently offers issue.opened. The file-backed
+backlog offers issue.opened (a new unticked checkbox) and issue.status_changed (a checkbox flip);
+its statuses are todo/done and its labels are epic file stems.
 
 Enabling starts from now, without running the old backlog. Repeated reads of one event deduplicate;
 a later real transition is a new event. Agent instructions may ask for PR/status work, but the

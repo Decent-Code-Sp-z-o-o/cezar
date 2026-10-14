@@ -7,6 +7,7 @@ import { setApiScope } from '@open-mercato/cezar-api-client'
 import { queryKeys } from '@/api/queries'
 import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { createQueryClient } from '@/api/query-client'
+import { trackerProviders } from '@/lib/tracker-providers'
 import { TrackerSection } from './tracker-section'
 
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
@@ -192,22 +193,23 @@ describe('Tracker settings', () => {
   })
 })
 
-it.each(['Jira', 'Linear'] as const)('enables only the configured %s provider and uses its scope label', async provider => {
+it.each(trackerProviders.map(provider => [provider.label, provider.kind, provider.scopeLabel] as const))('enables only the configured %s provider and uses its scope label', async (label, kind, scopeLabel) => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const body = String(input).includes('/tracker/candidates')
-      ? { available: true, source: { id: 'test', webUrl: 'https://example.test' }, candidates: [], truncated: false }
+      ? { available: true, source: { id: 'test', webUrl: kind === 'backlog' ? 'file:///proj/backlog' : 'https://example.test' }, candidates: [], truncated: false }
       : { association: null }
     return new Response(JSON.stringify(body), { status: 200 })
   }))
   const client = createQueryClient()
-  client.setQueryData(queryKeys.tracker.connection(), { connection: { id: 'fixture', kind: provider.toLowerCase() }, demo: false })
+  client.setQueryData(queryKeys.tracker.connection(), { connection: { id: 'fixture', kind }, demo: false })
   render(<MemoryRouter><QueryClientProvider client={client}><TrackerSection /></QueryClientProvider></MemoryRouter>)
-  const ready = await screen.findByRole('button', { name: `Browse ${provider}` }) as HTMLButtonElement
-  const disabled = screen.getByRole('button', { name: `Browse ${provider === 'Jira' ? 'Linear' : 'Jira'}` }) as HTMLButtonElement
+  const ready = await screen.findByRole('button', { name: `Browse ${label}` }) as HTMLButtonElement
   expect(ready.disabled).toBe(false)
-  expect(disabled.disabled).toBe(true)
+  for (const other of trackerProviders.filter(provider => provider.kind !== kind)) {
+    expect((screen.getByRole('button', { name: `Browse ${other.label}` }) as HTMLButtonElement).disabled).toBe(true)
+  }
   fireEvent.click(ready)
-  expect(await screen.findByLabelText(`Search ${provider === 'Jira' ? 'Jira projects' : 'Linear teams'}`)).toBeTruthy()
+  expect(await screen.findByLabelText(`Search ${scopeLabel}`)).toBeTruthy()
 })
 
 it('saves write-only credentials to the selected project and clears the secret form', async () => {
@@ -244,6 +246,37 @@ it('saves write-only credentials to the selected project and clears the secret f
   expect((screen.getByRole('button', { name: 'Browse Jira' }) as HTMLButtonElement).disabled).toBe(false)
 })
 
+it('saves the backlog directory without secret fields', async () => {
+  setApiScope('project-a')
+  let connection: { id: string; kind: string } | null = null
+  const writes: { url: string; body: unknown }[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.endsWith('/tracker/connection')) {
+      if (init?.method === 'PUT') {
+        writes.push({ url, body: JSON.parse(String(init.body)) })
+        connection = { id: '11111111-1111-4111-8111-111111111111', kind: 'backlog' }
+      }
+      return new Response(JSON.stringify({ connection, demo: false }), { status: 200 })
+    }
+    return new Response(JSON.stringify({ association: null }), { status: 200 })
+  }))
+  const client = createQueryClient()
+  render(<MemoryRouter><QueryClientProvider client={client}><TrackerSection /></QueryClientProvider></MemoryRouter>)
+  const configure = await screen.findByRole('button', { name: 'Configure Backlog credentials' })
+  await waitFor(() => expect((configure as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(configure)
+  expect(screen.queryByLabelText('API token')).toBeNull()
+  const directory = screen.getByLabelText('Backlog directory') as HTMLInputElement
+  expect(directory.value).toBe('backlog')
+  fireEvent.change(directory, { target: { value: 'docs/backlog' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save project credentials' }))
+  await screen.findByRole('button', { name: 'Replace Backlog credentials' })
+  expect(writes).toEqual([{ url: '/api/v1/p/project-a/tracker/connection', body: { kind: 'backlog', dir: 'docs/backlog' } }])
+  expect(screen.queryByLabelText('Backlog directory')).toBeNull()
+  expect((screen.getByRole('button', { name: 'Browse Backlog' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
 it('discards unsaved credentials and picker state when switching project', async () => {
   setApiScope('project-a')
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
@@ -276,8 +309,8 @@ it('shows local storage diagnostics and credential cleanup commands', async () =
   expect((screen.getByRole('button', { name: 'Configure Linear credentials' }) as HTMLButtonElement).disabled).toBe(false)
 })
 
-it.each(['jira', 'linear'] as const)('removing %s credentials removes the connected scope card even if metadata remains', async kind => {
-  const saved = { kind, connectionId: '11111111-1111-4111-8111-111111111111', source: { id: 'source', webUrl: 'https://example.com' }, externalId: '1', externalName: 'Saved scope' }
+it.each(['jira', 'linear', 'backlog'] as const)('removing %s credentials removes the connected scope card even if metadata remains', async kind => {
+  const saved = { kind, connectionId: '11111111-1111-4111-8111-111111111111', source: { id: 'source', webUrl: kind === 'backlog' ? 'file:///proj/backlog' : 'https://example.com' }, externalId: '1', externalName: 'Saved scope' }
   const client = createQueryClient()
   client.setQueryData(queryKeys.tracker.association(), { association: saved })
   client.setQueryData(queryKeys.tracker.connection(), { connection: { id: saved.connectionId, kind }, demo: false })

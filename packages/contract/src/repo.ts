@@ -124,7 +124,10 @@ export type WorktreeDirEntry = z.infer<typeof worktreeDirEntrySchema>;
 
 /**
  * `GET /api/v1/runs/:id/files?path=` — a directory listing or one file (size-capped, binary
- * flagged). `content` is absent exactly when `binary` or `tooLarge`.
+ * flagged). `content` is absent exactly when `binary` or `tooLarge`. `preview` is present
+ * exactly when the server will serve the file's bytes raw (`?raw=1`) for an inline,
+ * browser-rendered preview — extension on the raw allowlist AND within the raw size cap — so
+ * the client renders the verdict instead of re-deriving the allowlist and cap.
  *
  * A discriminated union on `type`. Both handlers now build their literal with `as const`; without
  * it the property widened to `string` during Hono's route-type inference and the route lost the
@@ -142,6 +145,7 @@ export const worktreeEntrySchema = z.discriminatedUnion('type', [
     size: z.number(),
     binary: z.boolean(),
     tooLarge: z.boolean(),
+    preview: z.enum(['image', 'pdf', 'video', 'audio', 'html']).optional(),
     content: z.string().optional(),
   }),
 ]);

@@ -298,7 +298,63 @@ describe('repo file-browser routes', () => {
   it('refuses raw for a non-image, in the wording /runs/:id/files already uses', async () => {
     const res = await file('path=src%2Fapp.ts&raw=1');
     expect(res.status).toBe(409);
-    expect(await errorOf(res)).toContain('raw serving is limited to images');
+    expect(await errorOf(res)).toContain('raw serving is limited to previewable file types');
+  });
+
+  // ---- the rich-preview verdict (the run route's shape; the Files browser's <img>/<iframe> paths
+  // never even ask for bytes unless the JSON entry says the server will serve them) ----
+
+  it('ships the raw-serving verdict in the entry preview field — a png is image, not just binary', async () => {
+    const res = await file('path=logo.png');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { binary: boolean; preview?: string; content?: string };
+    expect(body).toMatchObject({ type: 'file', binary: true, preview: 'image' });
+    expect(body.content).toBeUndefined();
+  });
+
+  it('serves a tracked svg raw as image/svg+xml under the sandbox CSP', async () => {
+    writeFileSync(
+      join(repoRoot, 'logo.svg'),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>',
+    );
+    g(repoRoot, 'add', '-A');
+    g(repoRoot, 'commit', '-m', 'svg');
+    const res = await file('path=logo.svg&raw=1');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/svg+xml');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('content-security-policy')).toBe(
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    );
+  });
+
+  it('serves a tracked pdf raw with the flag, like /runs/:id/files does', async () => {
+    writeFileSync(
+      join(repoRoot, 'spec.pdf'),
+      '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF',
+    );
+    g(repoRoot, 'add', '-A');
+    g(repoRoot, 'commit', '-m', 'pdf');
+    const entry = await file('path=spec.pdf');
+    expect((await entry.json()) as object).toMatchObject({ type: 'file', preview: 'pdf' });
+    const raw = await file('path=spec.pdf&raw=1');
+    expect(raw.status).toBe(200);
+    expect(raw.headers.get('content-type')).toBe('application/pdf');
+    expect(raw.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(raw.headers.get('content-security-policy')).toBe(
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    );
+  });
+
+  it('keeps Accept-only negotiation on the image surface — a pdf falls through to JSON', async () => {
+    writeFileSync(join(repoRoot, 'spec.pdf'), '%PDF-1.4\nminimal\n%%EOF');
+    g(repoRoot, 'add', '-A');
+    g(repoRoot, 'commit', '-m', 'pdf for accept');
+    const res = await apiRequest(app, '/api/v1/repo/files?path=spec.pdf', {
+      headers: { accept: 'image/*' },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as object).toMatchObject({ type: 'file', preview: 'pdf' });
   });
 
   it('reports an over-cap file as tooLarge with no content', async () => {

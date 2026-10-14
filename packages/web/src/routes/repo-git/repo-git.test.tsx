@@ -46,7 +46,8 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true,
+  terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 const CHANGES: ChangesPayload = {
@@ -599,12 +600,12 @@ describe('the repo view Files segment', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Heading' })).not.toBeNull()
     expect(document.querySelectorAll('[data-slot="file-preview-markdown"] li')).toHaveLength(2)
 
-    fireEvent.click(document.querySelector('[data-slot="markdown-view-toggle"] [data-mode="source"]')!)
+    fireEvent.click(document.querySelector('[data-slot="file-preview-view-toggle"] [data-view="source"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="file-preview-code"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="file-preview-code"]')?.textContent).toContain('# Heading')
 
     // …and back, so the toggle is a real two-way control.
-    fireEvent.click(document.querySelector('[data-slot="markdown-view-toggle"] [data-mode="rendered"]')!)
+    fireEvent.click(document.querySelector('[data-slot="file-preview-view-toggle"] [data-view="rendered"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="file-preview-markdown"]')).not.toBeNull())
   })
 
@@ -615,7 +616,7 @@ describe('the repo view Files segment', () => {
     })
     renderAt('/git/files/packages/web/src/app.tsx')
     await waitFor(() => expect(document.querySelector('[data-slot="file-preview-code"]')).not.toBeNull())
-    expect(document.querySelector('[data-slot="markdown-view-toggle"]')).toBeNull()
+    expect(document.querySelector('[data-slot="file-preview-view-toggle"]')).toBeNull()
   })
 
   it('a truncated index says so above the tree', async () => {

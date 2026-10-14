@@ -12,7 +12,9 @@ interface DirectionalUsageProps {
 }
 
 function exactTokens(value: number | undefined): string {
-  return value === undefined ? 'unknown' : new Intl.NumberFormat().format(value)
+  // Locale-explicit: this string is asserted verbatim by tests (and read by screen readers on
+  // every machine), so the host's default locale must not re-group the digits.
+  return value === undefined ? 'unknown' : new Intl.NumberFormat('en-US').format(value)
 }
 
 export function directionalUsageLabel(inputTokens?: number, outputTokens?: number): string {

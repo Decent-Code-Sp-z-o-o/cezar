@@ -8,7 +8,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'ollama'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -236,14 +236,16 @@ function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionS
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
     .filter((count): count is string => count !== undefined);
 
-  // OpenCode 2.x replaced the summary with one row per stored credential, with the literal
-  // `stored` state in the final column. Keep this shape deliberately narrow: a successful empty
-  // response is the valid no-credentials answer, while any other output without either the 1.x
-  // summary or 2.x rows remains inconclusive rather than being guessed as disconnected.
+  // OpenCode 2.x replaced the summary with one row per credential, whose final column is the
+  // source: `stored` (auth.json) or `environment` (a provider env var the CLI can see — live
+  // v2.0.28 prints `openai  openai_api_key  environment`). Keep this shape deliberately narrow:
+  // a successful empty response is the valid no-credentials answer, while any other output
+  // without either the 1.x summary or 2.x rows remains inconclusive rather than being guessed
+  // as disconnected.
   if (storedSummaries.length === 0) {
     if (lines.length === 0) return 'disconnected';
-    const storedRows = lines.filter((line) => /^.+\s{2,}.+\s+stored$/.test(line));
-    return storedRows.length === lines.length && storedRows.length > 0 ? 'connected' : null;
+    const credentialRows = lines.filter((line) => /^.+\s{2,}.+\s+(?:stored|environment)$/.test(line));
+    return credentialRows.length === lines.length && credentialRows.length > 0 ? 'connected' : null;
   }
   if (storedSummaries.length !== 1) return null;
   const storedCount = Number(storedSummaries[0]);
@@ -322,6 +324,21 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/**
+ * Ollama has no login: "connected" means the local server is up and answering, which is exactly
+ * what `ollama list` proves — it is an HTTP call to the daemon, and the CLI exits non-zero with
+ * "could not connect to ollama app" when no server is listening (so a binary on PATH alone is NOT
+ * a connected provider; that would offer a runner that cannot run). `--version` was rejected as
+ * the probe for precisely that reason: it succeeds without any server. Anything else non-zero is
+ * inconclusive rather than disconnected — we do not know what the CLI complained about.
+ */
+function parseOllamaStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode === 0) return 'connected';
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (/could not connect/i.test(output)) return 'disconnected';
+  return null;
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -389,6 +406,15 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
+  },
+  {
+    id: 'ollama',
+    overrideEnv: 'CEZ_OLLAMA_BIN',
+    executable: () => process.env.CEZ_OLLAMA_BIN ?? 'ollama',
+    statusArgs: ['list'],
+    loginArgs: [],
+    installHint: 'Install Ollama (https://ollama.com/download), then start it with `ollama serve`.',
+    parse: parseOllamaStatus,
   },
 ];
 

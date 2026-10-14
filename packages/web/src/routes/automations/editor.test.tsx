@@ -360,7 +360,7 @@ describe('tracker automation editor', () => {
   it('saves the selected historical event and status ID with the shared form', async () => {
     const sent = stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association, events: ['issue.opened', 'issue.status_changed'], statuses: [{ id: 'todo-id', name: 'To Do' }], labels: [], limitations: [] }) })
     renderEditor()
-    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'When the project tracker changes' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Jira work' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Implement {{tracker.key}}' } })
     fireEvent.click(await screen.findByRole('button', { name: 'issue.status_changed' }))
@@ -373,7 +373,7 @@ describe('tracker automation editor', () => {
   it('does not offer unadvertised Linear history events', async () => {
     stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association: { ...association, kind: 'linear' }, events: ['issue.opened'], statuses: [], labels: [], limitations: ['Early changes are not fully recorded.'] }) })
     renderEditor()
-    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'When the project tracker changes' }))
     await screen.findByText('Early changes are not fully recorded.')
     expect(screen.queryByRole('button', { name: 'issue.status_changed' })).toBeNull()
   })
@@ -385,7 +385,7 @@ it('invalidates tracker event options on the existing tracker cache prefix', asy
     association: { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: connectionId, connectionId },
     events: ['issue.opened'], statuses: [], labels: [], limitations: [] }) })
   const { client } = renderEditor()
-  fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'When the project tracker changes' }))
   fireEvent.click(await screen.findByRole('button', { name: 'issue.opened' }))
   connectionId = '22222222-2222-4222-8222-222222222222'
   await act(async () => { await client.invalidateQueries({ queryKey: ['tracker'] }) })

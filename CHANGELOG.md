@@ -1,3 +1,14 @@
+# Unreleased
+
+## ✨ Features
+- ✨ Auto model badge names the serving model beside the ask (`auto - Qwen3.8-27B`) in the run header and engine pills.
+- ✨ The engine lands the backend's own serving-model report (`session.started.model`, claude and cursor) on the run and step, so the `auto - <model>` badge now fills in for an unpinned model too — previously only a pinned model or an auto-runner launch ever wrote the identity.
+- ✨ Auto provider selection: a task can ask for a backend instead of naming one — the composer's **Auto** card, `cez task create --runner auto`, `runner: auto` on a workflow step or in an automation definition — and cezar resolves it at launch to the cheapest capable provider and model on the host, then fails over to a similar model on a different provider when that one runs out, bounded by `resources.autoProvider` (`maxFailovers` 3, `maxWaitMinutes` 10). Records keep both the resolved runner and the `auto` request; tasks naming a concrete runner never fail over and keep waiting for their own provider's reset.
+
+## 🐛 Fixes
+- 🐛 OpenCode 2.x credential rows sourced from environment variables (`openai  openai_api_key  environment`) no longer leave the provider stuck at "Could not verify" — the auth probe now recognizes the `environment` row state beside `stored`, so a CLI that self-reports a usable credential reads as connected.
+- 🐛 Settings → Agents can persist an Ollama default model: `PUT /api/v1/config` no longer strips `ollama` (and other newer runners) from `defaultModels`.
+
 # 0.15.2 (2026-10-14)
 
 ## Highlights

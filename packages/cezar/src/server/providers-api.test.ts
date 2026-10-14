@@ -59,6 +59,8 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  // `ollama list` — exit 0 IS the connected answer; the table's shape is irrelevant.
+  ollama: 'NAME             ID              SIZE      MODIFIED\nqwen3-coder:30b  6f3a1c2d9e4b    18 GB     2 days ago',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -75,10 +77,12 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   pi: 'No models available. Use /login to authenticate.',
   junie: 'Junie version: 26.9.22 (3419.7)',
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
+  // The daemon-down answer: `ollama list` exits 1 with "could not connect".
+  ollama: 'Error: could not connect to ollama app, is it running?',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'ollama') return executable;
   if (executable === 'agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
@@ -211,6 +215,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'ollama', status: 'connected', enabled: true },
       ],
     });
   });
@@ -218,7 +223,7 @@ describe('workspace provider API', () => {
   it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
     const runCommand = vi.fn<RunProviderCommand>();
-    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']);
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot', 'ollama']);
     const response = await apiRequest(app({
       providerAuth: service({}, runCommand),
       workspaceConfig,
@@ -234,6 +239,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'ollama', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -595,7 +601,11 @@ describe('workspace provider API', () => {
     expect(retryResponse.status).toBe(404);
   });
 
-  it('does not add provider fields or calls to /api/v1/health', async () => {
+  it('does not add provider fields or calls to /api/v1/health', { timeout: 20_000 }, async () => {
+    // 20s, not the 5s default: this is the ONE request that pays the cold health snapshot —
+    // ten concurrent agent-CLI `--version` probes, some of which (first-exec provenance scans,
+    // ollama among them) can stall seconds on a developer Mac. The live server pre-warms the
+    // snapshot at boot and serves it from cache, so only this test ever sees the raw compute.
     const runCommand = vi.fn<RunProviderCommand>();
     const response = await apiRequest(app({ providerAuth: service({}, runCommand) }), '/api/v1/health');
     const body = await response.json() as Record<string, unknown>;

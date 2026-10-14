@@ -24,6 +24,12 @@ export const runEventSchema = z.looseObject({
   ts: z.string(),
   stepId: z.string().optional(),
   type: z.string(),
+  /** Present only on `type: 'user-message'`. `true` marks a continuation prompt the ENGINE
+   *  wrote (restart recovery, usage-limit resume, usage-limit failover) — the agent still
+   *  receives the text verbatim, but a client must not render it as a message the user sent.
+   *  Absent (the default) means the user authored the message: the composer's Continue, a
+   *  follow-up, a live message, an ask reply. */
+  engineAuthored: z.boolean().optional(),
 });
 export type RunEvent = z.infer<typeof runEventSchema>;
 

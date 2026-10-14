@@ -19,7 +19,9 @@ import {
  * Protocol v2 (`item.*`, `turn.*`, `plan.updated`) is primary. v1 lines fill two roles:
  *
  *  - Lines with NO v2 counterpart always render: `user-message` (the engine writes user turns
- *    as v1 only), `note`/`lifecycle` (dim lines), `error` (danger), `image` (persisted URL —
+ *    as v1 only; one marked `engineAuthored: true` opens its turn but renders NO bubble — the
+ *    engine's own resume prompt is not something the user sent), `note`/`lifecycle` (dim lines),
+ *    `error` (danger), `image` (persisted URL —
  *    the v2 `image` twin carries raw base64 and never reaches the file), `check-output`
  *    (check steps spawn no agent session, so v1 is all there is).
  *  - Item-ish lines (`text`, `tool-call`, `tool-result`) are a FALLBACK for old runs recorded
@@ -54,8 +56,9 @@ export interface ThreadImage {
 /**
  * A structured AskUser question the agent posed via `CEZ:ASK` (#473, v2
  * `ask.requested`). The cockpit renders it as clickable option chips. Resolution
- * is client-side: the next `user-message` for the run flips `resolved` and
- * records the reply as `answer`, so a reloaded thread reconstructs the same
+ * is client-side: the next user-authored `user-message` for the run flips
+ * `resolved` and records the reply as `answer` (an engine-authored continuation
+ * prompt resolves nothing), so a reloaded thread reconstructs the same
  * resolved/pending state from the persisted stream.
  */
 export interface ThreadAsk {
@@ -72,7 +75,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot'
+  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot' | 'ollama'
   authFailureId: string
 }
 
@@ -86,7 +89,9 @@ export interface ThreadTurn {
   turnId?: string
   /** The v1 `user-message` that opened this turn. The FIRST turn usually has none — the initial
    *  prompt is the run's `task`, which the view renders from the run record. `ts` is when that
-   *  line was persisted (#941). */
+   *  line was persisted (#941). Also absent on a turn an engine-authored continuation prompt
+   *  opened (restart recovery, usage-limit resume, failover): the turn renders from the agent's
+   *  own output, with no bubble claiming the user sent anything. */
   userMessage?: { text: string; imageCount: number; images: string[]; ts?: string }
   /** Wall clock of the event that OPENED this turn — the `user-message` line when there is one,
    *  otherwise `turn.started` (#941). First stamp wins, so the v1 line and the v2 event that
@@ -363,9 +368,10 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   const itemsById = new Map<string, { turn: DraftTurn; entry: DraftEntry }>()
   let sessionEnded: ThreadState['sessionEnded']
   let turnSeq = 0
-  /** The latest unresolved AskUser card (#473). The next `user-message` resolves
+  /** The latest unresolved AskUser card (#473). The next user-authored `user-message` resolves
    *  it client-side (only one ask is ever pending — the agent asks once, then
-   *  parks `waiting` until the user answers). */
+   *  parks `waiting` until the user answers; an engine-authored continuation prompt is not an
+   *  answer and stays inert). */
   let pendingAsk: ThreadAsk | undefined
   let lastEventAt: string | undefined
 
@@ -421,21 +427,30 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     switch (event.type) {
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {
+        // `engineAuthored` marks a continuation prompt the ENGINE wrote (restart recovery,
+        // usage-limit resume, failover). The agent received it verbatim; the thread still opens
+        // the turn and stamps its start, but attaches no bubble — the line is engine noise, not
+        // something the user sent.
+        const engineAuthored = event.engineAuthored === true
         const text = str(event.text) ?? ''
         // Client-side resolution of the pending AskUser card (#473): the reply
-        // that follows an ask closes it and records the answer.
-        if (pendingAsk && !pendingAsk.resolved) {
+        // that follows an ask closes it and records the answer. Only the USER's
+        // message may do that — an engine continuation prompt the ask happened to
+        // precede is neither an answer nor permission to keep going.
+        if (pendingAsk && !pendingAsk.resolved && !engineAuthored) {
           pendingAsk.resolved = true
           if (text !== '') pendingAsk.answer = text
           pendingAsk = undefined
         }
         const turn = newTurn(event.seq)
         const ts = stamp(event.ts)
-        turn.userMessage = {
-          text,
-          imageCount: typeof event.imageCount === 'number' ? event.imageCount : 0,
-          images: Array.isArray(event.images) ? event.images.filter((u): u is string => typeof u === 'string') : [],
-          ...(ts !== undefined ? { ts } : {}),
+        if (!engineAuthored) {
+          turn.userMessage = {
+            text,
+            imageCount: typeof event.imageCount === 'number' ? event.imageCount : 0,
+            images: Array.isArray(event.images) ? event.images.filter((u): u is string => typeof u === 'string') : [],
+            ...(ts !== undefined ? { ts } : {}),
+          }
         }
         if (ts !== undefined) turn.startedAt = ts
         break

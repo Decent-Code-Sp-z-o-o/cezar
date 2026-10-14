@@ -7,6 +7,7 @@ import type {
   TrackerCandidatesResponse, TrackerItemsResponse, TrackerItemResponse,
   TrackerErrorResponse, TrackerAssociationInput, TrackerCandidatesQueryInput,
   TrackerCredentials, TrackerConnectionResponse, TrackerListQueryInput, TrackerSearchQueryInput, TrackerItemParams, TrackerItemQuery,
+  TrackerCompleteResponse,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -50,6 +51,11 @@ type Checks = [
   Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof tracker[':id']['$get'], 404>>>,
   Assert<Mutual<TrackerAssociationInput, InferRequestType<typeof tracker.association.$put>['json']>>,
   Assert<Mutual<TrackerCandidatesQueryInput, InferRequestType<typeof tracker.candidates.$get>['query']>>,
+  Assert<Mutual<TrackerItemQuery, InferRequestType<typeof scoped[':id']['complete']['$post']>['query']>>,
+  Assert<Mutual<TrackerItemParams & { projectId: string }, InferRequestType<typeof scoped[':id']['complete']['$post']>['param']>>,
+  Assert<Mutual<TrackerCompleteResponse, InferResponseType<typeof scoped[':id']['complete']['$post'], 200>>>,
+  Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof scoped[':id']['complete']['$post'], 404>>>,
+  Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof scoped[':id']['complete']['$post'], 409>>>,
 ];
 it('pins exact HTTP branches and middleware input types', () => {
   const falseComparator: Mutual<{a: string}, {a: string; b: number}> = false;

@@ -82,6 +82,7 @@ One browser window, with live task updates over Server-Sent Events:
 | **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots and file attachments), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
 | **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
+| **Terminal** | **Opt-in** (`CEZ_TERMINAL=1`; hidden by default). A real terminal (xterm) over a token-gated WebSocket to a PTY opened in the project's root **on the machine the cezar server runs on** (macOS or Linux) — for poking at the host itself: hung processes, logs outside a run's worktree, restarting a service. A session exists only while the tab is open; nothing it prints is stored. Spec `.ai/specs/2026-10-10-terminal-tab.md`. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. **Files** browses the whole repository — the tree on the left, the file on the right (syntax-highlighted, images inline, Markdown rendered with a toggle to the source), and a filter box that finds a path as you type. Every file is its own URL (`/git/files/<path>`), so a view can be refreshed or pasted to a colleague. The tree is git's own view of the repository, so `.gitignore`d build output and `node_modules` never appear — and a file git does not list cannot be opened, which is what keeps an ignored `.env` out of reach. Read-only: nothing here edits the checkout. |
 | **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. GitHub Enterprise works the same on any domain: a remote counts as GitHub when its host is `github.com`, `*.ghe.com`, or one `gh` is signed in to (`gh auth login --hostname <host>`, or `GH_HOST`). A self-hosted server on any other domain needs that login first. github.com and Enterprise projects work side by side; cezar pins the right host per repo, so `GH_HOST` never has to be exported. |
 | **Skills** | Local skills plus the team skills repo, with a rendered body + prompt preview. Refresh pulls the latest from the remote. |
@@ -243,7 +244,7 @@ steps:
     prompt: "{{task}}"
     skill: project-conventions   # optional — from .ai/skills or .ai/cezar/skills
     # model: opus                # optional per-step model override
-    # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi
+    # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi · ollama · auto
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
   - id: verify
     name: Verify
@@ -458,6 +459,7 @@ Useful environment variables:
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
 | `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode. Cezar has no cockpit permission response channel; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
+| `CEZ_TERMINAL=1` | Turn on the web **Terminal** tab: an xterm view over a token-gated WebSocket to a PTY (`node-pty`, falling back to `script(1)`) opened in the active project's root on the machine cezar runs on. **Off by default** — this is a shell on the host, the strongest surface cezar serves, so it is opt-in (spec `.ai/specs/2026-10-10-terminal-tab.md`). Off, the nav item is absent and the session route answers `409`. Force-off under `CEZ_DRY_RUN=1` either way. Read per request, but boot-time in spirit — set it and restart cezar. At most 4 sessions live per server; a session dies with its browser tab, and nothing a terminal prints is ever written to disk. A session is a full shell, not a sandbox: it can leave the project directory, and on a network-exposed deployment (`CEZ_REMOTE=1`) whoever the reverse proxy admits can drive it — set the flag only where that is the intent. |
 | `CEZ_AUTOMATIONS=0` | Turn **automations** off. On by default since the automations redesign (spec `.ai/specs/2026-09-14-automations-redesign.md`): the Automations view lists GitHub-triggered and scheduled automations, and cezar polls GitHub or fires schedules on each enabled one while it is running — nothing runs until you enable an automation yourself. An agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Only the exact value `0` opts out (`CEZ_AUTOMATIONS=1`, the old opt-in, is accepted and changes nothing); opted out, the nav item is absent, the endpoints answer `409`, and the workspace scheduler never starts. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are kept either way. |
 | `CEZ_WORKFLOW_WEBHOOKS=1` | Let a workflow graph's **`notify.webhook`** node POST to the URL it names (JSON: `text`, `run`, `node`). Off by default: a workflow file — which can be imported from anywhere — calling out to an arbitrary URL widens exposure, so it is opt-in. Off, the node leaves by `failed` with a note; under `CEZ_DRY_RUN=1` nothing is sent either way. |
 | `CEZ_DISPATCH=0` | Turn OFF **task dispatch**, which is on by default: a running task may start other cezar tasks with `cez task create` — each in its OWN worktree forked off the parent's branch, with a budget carved out of the parent's — and they report back into the parent's session when they settle (`cez task report`). Children appear nested under their parent in the task lists. Tasks talk through a tree directory (`.ai/cezar/dispatch/<root>/`: the brief, each task's order/notes/report, an inbox per task) and cezar wakes a parked recipient when a file lands. A `--kind review` child judges another task's branch and answers with a verdict. ON by default (the owner-approved exception to "cost-widening features are opt-in" — see `AGENTS.md`), and only the exact value `0` turns it off; with it off the `/runs/:id/dispatch` and `/runs/:id/report` routes answer `409`, no task is told about the CLI, and the cockpit hides the "Review open PRs" template. A headless `cezar run` never dispatches either way — there is no cockpit for the CLI to reach, so no task is told about it. Read at boot, so restart after changing it. This is the widest cost-widening flag here — one task can start four more agents — so give dispatching tasks a budget. |
@@ -469,6 +471,7 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_OLLAMA_BIN=/path/to/ollama` | Override which `ollama` binary is used (provider probe and host detection). The runner itself talks HTTP to `OLLAMA_HOST` (default `http://127.0.0.1:11434`) — that variable, not the binary, decides where a non-default server lives. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -491,7 +494,6 @@ Useful environment variables:
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Tasks toggle overrides this default. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Tasks toggle overrides this; autonomous runs always skip it. |
-| `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the star-ask dialog (shown at most three times per browser, only after a task ends well once three have, and only while you are at the screen). It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Unset, the count refreshes every 10 seconds while a cockpit tab is visible, paced to GitHub's rate limit (about once a minute unauthenticated; every 10 s with `GITHUB_TOKEN`/`GH_TOKEN` set, which is then sent with the request). Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |
 | `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
 
 ### Troubleshooting: the agent's shell returns nothing
@@ -582,7 +584,7 @@ the API below.
 ## Coding agent backends
 
 cezar is not married to one vendor. Every agent step runs through a single
-`AgentRunner` seam with five built-in backends:
+`AgentRunner` seam with these built-in backends:
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
@@ -592,6 +594,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
 | **Cursor** | [`agent`](https://cursor.com/docs/cli/overview) (Cursor Agent CLI) | Headless print mode: `agent -p --force --trust --output-format stream-json`. Continue is fresh-session in v1 (print mode exits per turn). Its documented output carries no token/cost figures, so a Cursor run's header always reads zero tokens and no cost — that is the backend not reporting usage, not the run using nothing. | Ignores `allowedTools`; `--force` / `--trust` auto-approves tool use for unattended runs. |
 | **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |
+| **Ollama** _(experimental)_ | [`ollama`](https://ollama.com) | The local server's own HTTP API (`POST /api/chat`, NDJSON streaming; `OLLAMA_HOST` honoured). The model picker reads the host library live from `GET /api/tags`. | **Text only.** The chat wire has no tool channel, so a run cannot read or edit files — route it bounded text work (summaries, research, prompts with an external verifier), not implementation tasks. `allowedTools`/`mcpServers` are ignored; every permission question is moot. |
 
 > ⚠️ **Junie, OpenCode and pi support are experimental.** All three runners work
 > but are less battle-tested than the Claude Code and Codex backends, and Junie
@@ -621,6 +624,35 @@ is no longer advertised.
 1. **Config default** — `"defaultRunner": "codex"` in `.ai/cezar/config.json`.
 2. **Per task** — the backend picker next to the task box in the cockpit.
 3. **Per workflow step** — `runner:` on any step in the YAML.
+
+**Auto — let cezar pick the backend.** The task picker's first card is **Auto**
+("cheapest capable provider, chosen at launch"; selecting it swaps the model
+picker for a single *model is chosen at launch* row), and the same `auto` value
+is accepted wherever a runner is named: on a workflow step, a dispatch child
+(`cez task create --runner auto`) and an automation definition. At launch cezar
+resolves it to the concrete backend + model expected to consume the fewest
+cost-weighted tokens among the providers actually usable on this host — the
+lowest cost tier wins, ties break on this workspace's own measured usage per
+model, then on cezar's runner order — and the task keeps both the resolved
+runner and the request: the header pill reads `auto → codex/gpt-5.1-codex-mini`,
+and the thread carries one lifecycle line per decision. When the resolved
+provider runs out mid-run (a usage limit with a known reset) and the reset is
+further away than `maxWaitMinutes`, the run continues on the nearest similar
+model on a **different** provider instead of waiting the window out; the
+exhausted provider stays excluded for the rest of the run, and once
+`maxFailovers` hops are spent — or no alternative exists — the usual
+wait-for-reset takes over. A task that names a concrete runner never fails over.
+A dispatched child inherits the request, not the resolution, and re-resolves at
+its own launch. With `modelsLocked` on, auto still balances the provider but
+sends no model flag, so the native agent settings stay authoritative. With no
+usable provider at all, auto degrades to `defaultRunner` with a note — a task
+still runs; auto is an optimization, not a gate. The knobs
+are `resources.autoProvider` in `~/.cezar/config.json` (Settings → Resources):
+`enabled` (default `true`), `maxFailovers` (3) and `maxWaitMinutes` (10);
+`enabled: false` resolves every `auto` to `defaultRunner` with a note and
+switches failover off. This `auto` is the backend choice, one level above the
+per-runner model entry of the same name — send no model at all and let that CLI
+decide — which keeps working on a task that named a concrete backend.
 
 Per-step overrides are what make **mixed-agent strategies** a one-liner:
 implement with one agent, review with another, and let a shell check referee:
@@ -714,7 +746,7 @@ never blocks startup):
   // the source against a moving branch head — cezar verifies it resolves to
   // exactly that commit, and reports it as `team.commit`.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
-  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi"
+  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi" · "ollama"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
@@ -740,7 +772,12 @@ root — live once in `~/.cezar/config.json`, alongside the
 [project registry](#multiple-projects-one-cockpit), and are edited from
 **Settings → Resources** and **Settings → Projects**. A `maxParallel` left over
 in a repo's `.ai/cezar/config.json` is imported into the workspace file the
-first time cezar boots there, and ignored afterwards.
+first time cezar boots there, and ignored afterwards. `resources.autoProvider` —
+`enabled`, `maxFailovers`, `maxWaitMinutes` — bounds the
+[Auto backend](#coding-agent-backends) pick and its failover: how many hops a
+run may take when its provider runs out, and how far away a usage-limit reset
+must be before cezar fails over instead of waiting. Changing it takes effect
+without a restart.
 
 **Settings → Resources** opens on a live **Machine** card, and the sidebar carries
 the same numbers as a one-row **glance** (CPU, its 60 s sparkline, compact RAM)

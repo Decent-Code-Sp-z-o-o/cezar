@@ -64,7 +64,8 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true,
+  terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -177,6 +178,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
     idleTimeoutMinutes: 15,
     monitoringWakeIntervalMinutes: null,
     autoResumeOnUsageLimit: true,
+    autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 },
     memoryLimitMb: null,
     worktreeRetentionDefault: 10,
   },
@@ -440,6 +442,7 @@ describe('picker data flows', () => {
     fireEvent.pointerDown(runnerPill)
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining('auto'),
       expect.stringContaining('claude'),
       expect.stringContaining('codex'),
     ])
@@ -493,6 +496,7 @@ describe('picker data flows', () => {
     fireEvent.pointerDown(runnerPill)
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining('auto'),
       expect.stringContaining('claude'),
       expect.stringContaining('cursor'),
     ])
@@ -710,6 +714,86 @@ describe('picker data flows', () => {
       const visible = [...document.querySelectorAll('[data-slot="source-option"]')]
       expect(visible).toHaveLength(0)
     })
+  })
+})
+
+// ---- the Auto runner (spec 2026-10-12-auto-provider-selection) ----------------------------------
+
+describe('the Auto runner', () => {
+  /** Two connected backends, so the runner pill renders at all. */
+  const multi = { health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI }
+  const modelPill = () => document.querySelector('[data-slot="model-pill"]') as HTMLElement
+  const pillRow = () =>
+    document.querySelector('[data-slot="runner-pill"]') as HTMLElement | null
+
+  /** Open the runner pill and click the option whose label contains `match`. */
+  const pickRunner = async (match: string) => {
+    fireEvent.pointerDown(document.querySelector('[data-slot="runner-pill"]') as HTMLElement)
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes(match)) as HTMLElement)
+  }
+
+  it('collapses the model picker to the launch-resolved row while auto is selected', async () => {
+    serve(multi)
+    renderNewTask()
+    await pillReady()
+
+    await pickRunner('auto')
+    await waitFor(() => expect(pillRow()?.textContent).toBe('auto'))
+    // One non-interactive row: no model can be pinned when the launch picks provider and model.
+    expect(modelPill().tagName).toBe('SPAN')
+    expect(modelPill().textContent).toBe('Model is chosen at launch, per availability')
+    expect(modelPill().querySelector('svg')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
+
+    // A concrete pick brings the interactive picker straight back.
+    await pickRunner('codex')
+    await waitFor(() => expect(modelPill().tagName).toBe('BUTTON'))
+  })
+
+  it('sends runner auto verbatim and no model — the launch resolves both together', async () => {
+    serve(multi)
+    renderNewTask()
+    await pillReady()
+
+    // A model pinned on claude must not survive the switch: the launch picks its own.
+    fireEvent.pointerDown(modelPill())
+    const presets = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(presets.find((option) => option.textContent?.includes('sonnet')) as HTMLElement)
+    await waitFor(() => expect(modelPill().textContent).toContain('sonnet'))
+
+    await pickRunner('auto')
+    await waitFor(() => expect(modelPill().textContent).toBe('Model is chosen at launch, per availability'))
+    fireEvent.change(textarea(), { target: { value: 'Let cezar pick' } })
+    await startTask()
+
+    const body = postedBody() as Record<string, unknown>
+    expect(body.runner).toBe('auto')
+    expect(body).not.toHaveProperty('model')
+  })
+
+  it('keeps the auto request sticky across a remount, with the collapsed row it implies', async () => {
+    serve(multi)
+    renderNewTask()
+    await pillReady()
+    await pickRunner('auto')
+    await waitFor(() => expect(pillRow()?.textContent).toBe('auto'))
+
+    cleanup()
+    serve(multi)
+    renderNewTask()
+    await pillReady()
+    expect(pillRow()?.textContent).toBe('auto')
+    expect(modelPill().textContent).toBe('Model is chosen at launch, per availability')
+  })
+
+  it('never summons the runner pill on a single-backend host — the Auto card rides, not leads', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(pillRow()).toBeNull()
+    // The model pill stays the ordinary interactive picker it always was.
+    expect(modelPill().tagName).toBe('BUTTON')
   })
 })
 
@@ -1310,7 +1394,8 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+    capabilities: { localHandoff: true,
+  terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -1885,11 +1970,14 @@ describe('the composer runner pill carries the account', () => {
     fireEvent.pointerDown(runnerPill()!)
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((o) => o.textContent?.replace(/\s+/g, ' '))).toEqual([
+      // The Auto card leads (spec 2026-10-12-auto-provider-selection § UI/UX)…
+      'autoCheapest capable provider, chosen at launch; fails over if the provider runs out',
+      // …then the concrete rows, unchanged.
       'claude · Default/home/u/.claude'.replace(/\s+/g, ' '),
       'claude · Klaudiusz~/.claude-klaudiusz'.replace(/\s+/g, ' '),
     ])
     // Each row names its folder: the labels are cezar's invention, the folder is the account.
-    expect(options[1]?.textContent).toContain('~/.claude-klaudiusz')
+    expect(options[2]?.textContent).toContain('~/.claude-klaudiusz')
   })
 
   it('starts on the account the repo is set to, without the user picking anything', async () => {

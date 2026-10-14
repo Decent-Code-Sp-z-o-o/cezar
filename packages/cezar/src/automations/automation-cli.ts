@@ -40,14 +40,14 @@ export interface AutomationCliIo {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = `cez automation — create and manage automations (GitHub/Jira/Linear event polls and schedules) on a running cockpit
+const USAGE = `cez automation — create and manage automations (GitHub/Jira/Linear/backlog event polls and schedules) on a running cockpit
 
   cez automation schema                         print the definition shape, bounds and prompt placeholders
   cez automation create [--file <def.json> | --json '<json>'] [--enable]
                                                 create one from a JSON definition (stdin when neither flag is given);
                                                 paused unless --enable
   cez automation add --name <name> (--cron "<M H * * *>" | --on <event>[,<event>] --every <5m|1h>)
-                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner ${RUNNER_IDS.join('|')}]
+                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner ${RUNNER_IDS.join('|')}|auto]
                      [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
                      [--label <l>]... [--author <a>]... [--enable]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"

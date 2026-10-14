@@ -110,7 +110,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'tracker',
     title: 'Issue tracker',
-    description: 'Connect this project to Jira or Linear.',
+    description: 'Connect Jira, Linear, or the local backlog directory.',
     icon: TicketIcon,
     component: TrackerSection,
     scope: 'project',

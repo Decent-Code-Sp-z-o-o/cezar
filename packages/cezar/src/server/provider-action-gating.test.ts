@@ -71,7 +71,8 @@ describe('provider action gating', () => {
     title: 'Task',
     workflow: 'quick-task',
     task: input.task,
-    runner: input.runner,
+    // Mirrors `startRun`'s own fold: the record carries the concrete runner, `auto` the echo.
+    runner: input.runner !== 'auto' ? input.runner : undefined,
     steps: [],
   });
 
@@ -298,7 +299,7 @@ describe('the gate verifies before it refuses', () => {
       title: 'Task',
       workflow: 'quick-task',
       task: input.task,
-      runner: input.runner,
+      runner: input.runner !== 'auto' ? input.runner : undefined,
       steps: [],
     }));
   });

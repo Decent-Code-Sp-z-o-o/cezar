@@ -68,7 +68,6 @@ import {
   getSkillsUpdate,
   getSelfUpdate,
   getSelfUpdateDevelopment,
-  getStarCount,
   getTelemetryConsent,
   refreshSelfUpdate,
   setSelfUpdateChannel,
@@ -443,9 +442,6 @@ export const workspaceQueryKeys = {
   /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
   selfUpdate: ['workspace', 'self-update'] as const,
   selfUpdateDevelopment: ['workspace', 'self-update', 'development'] as const,
-  /** cezar's own GitHub star count via `GET /api/v1/star-count`, behind the sidebar's ⭐ ask.
-   *  Workspace-led: the number is about cezar, not about whichever project is on screen. */
-  starCount: ['workspace', 'star-count'] as const,
   /** The opt-in telemetry answer via `GET /api/v1/telemetry/consent` — one per machine. */
   telemetryConsent: ['workspace', 'telemetry-consent'] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
@@ -500,7 +496,8 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot }
+  const ollama = useRunnerModels('ollama', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, ollama }
 }
 
 export function useProviderStatus() {
@@ -1499,29 +1496,8 @@ export function useAgentProfiles() {
   })
 }
 
-/** The chip's refresh cadence — matches the server's `STAR_CACHE_TTL_MS`, which also paces
- *  itself to GitHub's rate limit, so a poll never costs more than one cached read. */
-export const STAR_COUNT_REFRESH_MS = 10_000
-
-/**
- * cezar's own star count, for the sidebar's ⭐ ask — refreshed every ten seconds while the tab is
- * visible (TanStack pauses `refetchInterval` in the background). No retry: the server answers
- * `{ available: false }` for every failure, and the next tick is the retry.
- */
-export function useStarCount(enabled = true) {
-  return useQuery({
-    queryKey: workspaceQueryKeys.starCount,
-    queryFn: ({ signal }) => getStarCount({ signal }),
-    enabled,
-    staleTime: STAR_COUNT_REFRESH_MS,
-    refetchInterval: STAR_COUNT_REFRESH_MS,
-    retry: false,
-    refetchOnMount: false,
-  })
-}
-
-/** The opt-in telemetry answer. Read by the consent bar and Settings → Privacy; both write
- *  through `putTelemetryConsent` and set this cache from the answer. */
+/** The opt-in telemetry answer. Read by Settings → Privacy, which writes through
+ *  `putTelemetryConsent` and sets this cache from the answer. */
 export function useTelemetryConsent() {
   return useQuery({
     queryKey: workspaceQueryKeys.telemetryConsent,
@@ -1530,7 +1506,6 @@ export function useTelemetryConsent() {
     retry: false,
   })
 }
-
 export function useSkillsUpdate(projectId: string, enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.skillsUpdate(projectId),

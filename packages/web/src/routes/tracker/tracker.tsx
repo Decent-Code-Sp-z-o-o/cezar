@@ -1,5 +1,5 @@
-import { useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
-import { AlertTriangleIcon, ArrowLeftIcon, CircleDotIcon, ExternalLinkIcon, RefreshCwIcon, SearchIcon, SettingsIcon, TicketIcon } from 'lucide-react'
+import { useMutation, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
+import { AlertTriangleIcon, ArrowLeftIcon, CheckIcon, CircleDotIcon, ExternalLinkIcon, RefreshCwIcon, SearchIcon, SettingsIcon, TicketIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { useParams } from 'react-router'
 
@@ -10,7 +10,7 @@ import { useIsDesktop } from '@/lib/use-desktop'
 import { shortAge } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
-import { getTrackerItem } from '@/api/client'
+import { completeTrackerItem, getTrackerItem } from '@/api/client'
 import { useTrackerWatch } from '@/api/tracker-watch'
 import { useProjectScope } from '@/api/project-scope-context'
 import { queryKeys, TRACKER_STALE_TIME, TrackerRefreshError, useSkills, useTrackerConnection, useTrackerAssociation, useTrackerItem, useTrackerItems, useWorkflows } from '@/api/queries'
@@ -203,6 +203,16 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
   const detail = useTrackerItem(association, id)
   const workflows = useWorkflows()
   const skills = useSkills()
+  const queryClient = useQueryClient()
+  // The file-backed provider is the only one that writes back: ticking the epic's checkbox.
+  const complete = useMutation({
+    mutationFn: () => completeTrackerItem(id, { association }),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tracker.all() })
+      toast(`${result.item.id} marked done`)
+    },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
   const [lastItem, setLastItem] = useState<TrackerItem | null>(null)
   useEffect(() => {
     if (detail.data?.available) setLastItem(detail.data.item)
@@ -223,7 +233,15 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
         <a className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground hover:underline" href={item.url} target="_blank" rel="noopener noreferrer">open on {TRACKER_PROVIDERS[association.kind].label}<ExternalLinkIcon aria-hidden="true" className="size-2.5" /></a>
       </p>
       <h2 className="mt-2 text-xl leading-snug font-semibold">{item.title}</h2>
-      <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground">{item.status}</span>{item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground">{label}</span>)}</div>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <span className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground">{item.status}</span>
+        {item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground">{label}</span>)}
+        {association.kind === 'backlog' && item.status === 'todo' ? (
+          <Button className="ml-1" size="sm" variant="outline" disabled={complete.isPending} onClick={() => complete.mutate()}>
+            <CheckIcon aria-hidden="true" className="size-3.5" />Mark done
+          </Button>
+        ) : null}
+      </div>
       {failure}
       {trackerLosses(item).length ? <div className="mt-4 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm"><AlertTriangleIcon className="mr-2 inline size-4" />This snapshot is incomplete. Review the limitations in the handoff panel.</div> : null}
       <section data-slot="tracker-body" className="mt-5 text-sm"><Markdown>{item.body.trim() || '*No description was provided.*'}</Markdown></section>

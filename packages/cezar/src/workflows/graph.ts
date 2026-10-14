@@ -57,7 +57,10 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
-    runner: z.enum(RUNNER_IDS).optional(),
+    /** `auto` resolves at node launch on the same engine path as a task-level request (spec
+     *  2026-10-12-auto-provider-selection). The dispatch/workflow nodes below stay concrete:
+     *  their runner names the child's default, and a child that wants auto asks for it itself. */
+    runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
     /** Author-declared outcomes (D10/D17). The agent picks one by ending its turn with

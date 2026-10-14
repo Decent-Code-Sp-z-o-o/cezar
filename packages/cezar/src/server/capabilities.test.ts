@@ -161,6 +161,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       singleProject: false,
       automations: true,
       dispatch: true,
+      terminal: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
@@ -247,6 +248,27 @@ describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
       followups: false,
       singleProject: false,
     });
+  });
+});
+
+describe('resolveCapabilities — terminal (spec 2026-10-10-terminal-tab)', () => {
+  it('is OFF by default — a shell on the host is opt-in', () => {
+    expect(resolveCapabilities({}).terminal).toBe(false);
+  });
+
+  it('is on with CEZ_TERMINAL=1', () => {
+    expect(resolveCapabilities({ CEZ_TERMINAL: '1' }).terminal).toBe(true);
+  });
+
+  it.each(['0', 'true', 'yes', '', 'on'])(
+    'stays off for CEZ_TERMINAL=%j — only an exact "1" opts in',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_TERMINAL: value }).terminal).toBe(false);
+    },
+  );
+
+  it('is force-off under CEZ_DRY_RUN=1 even when opted in', () => {
+    expect(resolveCapabilities({ CEZ_TERMINAL: '1', CEZ_DRY_RUN: '1' }).terminal).toBe(false);
   });
 });
 

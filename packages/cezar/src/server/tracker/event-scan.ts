@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { trackerKindSchema } from '@open-mercato/cezar-contract';
 import type {
   TrackerAssociation,
   TrackerAutomationEvent,
@@ -31,7 +32,7 @@ const eventSchema = z.object({
   eventId: z.string(),
   timestamp: z.string(),
   tieBreaker: z.string(),
-  provider: z.enum(['jira', 'linear']),
+  provider: trackerKindSchema,
   event: z.enum([
     'issue.opened',
     'issue.status_changed',

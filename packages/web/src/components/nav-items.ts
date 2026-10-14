@@ -4,6 +4,7 @@ import {
   ListChecksIcon,
   SettingsIcon,
   SparklesIcon,
+  SquareTerminalIcon,
   WorkflowIcon,
   ZapIcon,
   TicketIcon,
@@ -36,6 +37,10 @@ export type NavItem = {
    *  needs no GitHub remote, so a repo without one still gets the page (with the poll kind
    *  disabled there). See `visibleNavItems`. */
   automations?: boolean
+  /** Terminal-gated (spec `.ai/specs/2026-10-10-terminal-tab.md`): the item exists only while
+   *  `/api/health` reports `capabilities.terminal` — opt-in via `CEZ_TERMINAL=1`, off by default.
+   *  See `visibleNavItems`. */
+  terminal?: boolean
   tracker?: boolean
 }
 
@@ -52,6 +57,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/tracker', label: 'Tracker', icon: TicketIcon, match: ['/tracker'], tracker: true },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
+  { to: '/terminal', label: 'Terminal', icon: SquareTerminalIcon, match: ['/terminal'], terminal: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
@@ -65,6 +71,8 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — automations, default-on (spec 2026-09-14), `CEZ_AUTOMATIONS=0` off. */
   automations?: boolean
+  /** `capabilities.terminal` — the web terminal, opt-in (spec 2026-10-10-terminal-tab). */
+  terminal?: boolean
   /** Saved local association; its kind supplies the provider label. */
   tracker?: TrackerKind
 }
@@ -88,12 +96,14 @@ export function visibleNavItems({
   forge = false,
   inbox = false,
   automations = false,
+  terminal = false,
   tracker,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
     && (item.automations ? automations : true)
+    && (item.terminal ? terminal : true)
     && (item.tracker ? tracker !== undefined : true))
     .map((item) => item.tracker ? { ...item, label: tracker ? TRACKER_PROVIDERS[tracker].label : item.label } : item)
 }

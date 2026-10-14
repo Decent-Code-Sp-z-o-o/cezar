@@ -1,4 +1,11 @@
-import { FileQuestionIcon, FileWarningIcon, FileXIcon, MousePointerClickIcon, TriangleAlertIcon } from 'lucide-react'
+import {
+  ExternalLinkIcon,
+  FileQuestionIcon,
+  FileWarningIcon,
+  FileXIcon,
+  MousePointerClickIcon,
+  TriangleAlertIcon,
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { ApiError, repoFileRawUrl, runFileRawUrl } from '@/api/client'
@@ -9,14 +16,17 @@ import { highlight, highlightSync, langForPath, type SynToken } from '@/lib/high
 import { cn } from '@/lib/utils'
 
 import { Markdown } from '../task-thread/markdown'
-import { formatFileSize, previewKind } from './worktree-files'
+import { formatFileSize, previewKind, type PreviewKind } from './worktree-files'
 
 /**
  * The preview pane behind BOTH file browsers (R5 Step 1.6; generalized for the repo Files sub-tab,
- * #1279). Every state is honest about WHY there is no text: images render inline from the server's
- * raw mode (image extensions only — the server refuses everything else as bytes), size-capped files
- * say "too large", binary non-images say "binary", and a 409 comes back in the server's own words.
- * Text goes through the ONE Shiki singleton with `langForPath`, plaintext fallback included.
+ * #1279). Every state is honest about WHY there is no text: the server-renderable kinds (images,
+ * pdf, video, audio, html) render inline from the server's raw mode — the server ships its verdict
+ * in the entry's `preview` field, so the client never re-derives the allowlist — markdown renders
+ * as formatted text with a `Rendered | Source` toggle (spec 2026-10-05-repo-file-browser Q8),
+ * size-capped files say "too large", binary non-previewables say "binary", and a 409 comes back in
+ * the server's own words. Text goes through the ONE Shiki singleton with `langForPath`, plaintext
+ * fallback included.
  *
  * `source` is what made this reusable: a run's worktree and the project checkout answer the same
  * `WorktreeEntry` shape from two different routes, so the only coupling was which hook to call.
@@ -43,6 +53,16 @@ function useFileEntry(source: FileSource, path: string | undefined) {
 function rawUrl(source: FileSource, path: string): string {
   return source.kind === 'run' ? runFileRawUrl(source.runId, path) : repoFileRawUrl(path)
 }
+
+/** The kinds whose bytes the server serves raw — these previews load from the raw URL. */
+const RAW_URL_KINDS: ReadonlySet<PreviewKind> = new Set(['image', 'pdf', 'video', 'audio', 'html'])
+
+/**
+ * The Markdown view mode, remembered for the SESSION rather than per file: someone reading several
+ * specs in a row should not re-toggle at every one. Module-level on purpose — this is a transient
+ * view preference, not state a user authors, so it earns no storage key (AGENTS.md § Zero config).
+ */
+let markdownViewMode: 'rendered' | 'source' = 'rendered'
 
 export function FilePreview({
   source,
@@ -100,18 +120,6 @@ export function FilePreview({
   return <FileEntryView source={source} entry={entry.data} className={className} />
 }
 
-/** True for the extensions the viewer offers a rendered Markdown view for. */
-function isMarkdownPath(path: string): boolean {
-  return /\.(md|markdown|mdx)$/i.test(path)
-}
-
-/**
- * The Markdown view mode, remembered for the SESSION rather than per file: someone reading several
- * specs in a row should not re-toggle at every one. Module-level on purpose — this is a transient
- * view preference, not state a user authors, so it earns no storage key (AGENTS.md § Zero config).
- */
-let markdownViewMode: 'rendered' | 'source' = 'rendered'
-
 function FileEntryView({
   source,
   entry,
@@ -122,7 +130,12 @@ function FileEntryView({
   className?: string
 }) {
   const kind = previewKind(entry)
-  const markdown = kind === 'text' && isMarkdownPath(entry.path)
+  const markdown = kind === 'markdown'
+  // One raw URL per render for every server-renderable kind: the image inline it directly, the
+  // rest also earn the header's open-in-new-tab link (`kind !== 'image'` — the pane IS the image).
+  const rawHref = RAW_URL_KINDS.has(kind) ? rawUrl(source, entry.path) : undefined
+  // Markdown's Rendered | Source choice (spec 2026-10-05-repo-file-browser Q8) lives here, not
+  // inside the markdown body, so the pane header can host the toggle.
   const [mode, setMode] = useState(markdownViewMode)
   const pick = (next: 'rendered' | 'source') => {
     markdownViewMode = next
@@ -140,39 +153,65 @@ function FileEntryView({
         className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))] px-4 py-2 text-xs shadow-[0_-1px_0_color-mix(in_oklab,var(--muted)_40%,var(--card))]"
       >
         <span className="min-w-0 truncate font-mono font-medium">{entry.path}</span>
-        {markdown ? (
-          <div data-slot="markdown-view-toggle" className="ml-auto flex shrink-0 overflow-hidden rounded-sm border border-border">
-            {(['rendered', 'source'] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                data-mode={value}
-                aria-pressed={mode === value}
-                onClick={() => pick(value)}
-                className={cn(
-                  'px-2 py-0.5 capitalize',
-                  mode === value ? 'bg-muted font-medium text-foreground' : 'text-soft-foreground hover:bg-muted',
-                )}
-              >
-                {value}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <span className={cn('shrink-0 tabular-nums text-soft-foreground', markdown ? 'pl-2' : 'ml-auto')}>
-          {formatFileSize(entry.size)}
-        </span>
+        {markdown && <ViewToggle mode={mode} onModeChange={pick} />}
+        <span className="ml-auto shrink-0 tabular-nums text-soft-foreground">{formatFileSize(entry.size)}</span>
+        {rawHref !== undefined && kind !== 'image' && (
+          <a
+            data-slot="file-preview-open-raw"
+            href={rawHref}
+            target="_blank"
+            rel="noreferrer"
+            title="Open the raw file in a new tab"
+            aria-label="Open the raw file in a new tab"
+            className="shrink-0 text-soft-foreground transition-colors hover:text-foreground"
+          >
+            <ExternalLinkIcon className="size-3.5" aria-hidden="true" />
+          </a>
+        )}
       </header>
       {kind === 'image' ? (
         <div className="flex justify-center p-4">
           {/* Raw bytes from the same origin the JSON came from — no auth story to get wrong. */}
           <img
             data-slot="file-preview-image"
-            src={rawUrl(source, entry.path)}
+            src={rawHref}
             alt={entry.path}
             className="max-h-[70vh] max-w-full rounded-sm"
           />
         </div>
+      ) : kind === 'markdown' ? (
+        mode === 'source' ? (
+          <CodeLines path={entry.path} text={entry.content ?? ''} />
+        ) : (
+          // The thread's own Markdown component: the same single Shiki for fences and the same
+          // link-safety policy, which a repository README needs for exactly the same reason agent
+          // output does. A second Streamdown configuration here would be two renderers to keep honest.
+          <div data-slot="file-preview-markdown" className="px-4 py-3">
+            <Markdown>{entry.content ?? ''}</Markdown>
+          </div>
+        )
+      ) : kind === 'pdf' ? (
+        // The browser's own PDF viewer. The raw response is application/pdf with nosniff and a
+        // sandbox CSP — served as a document the viewer owns, never sniffed as HTML.
+        <iframe src={rawHref} title={entry.path} data-slot="file-preview-pdf" className="h-[70vh] w-full" />
+      ) : kind === 'video' ? (
+        <div className="flex justify-center p-4">
+          <video src={rawHref} controls data-slot="file-preview-video" className="max-h-[70vh] w-full rounded-sm" />
+        </div>
+      ) : kind === 'audio' ? (
+        <div className="p-4">
+          <audio src={rawHref} controls data-slot="file-preview-audio" className="w-full" />
+        </div>
+      ) : kind === 'html' ? (
+        // `sandbox=""` — no scripts, no forms, opaque origin — is the client-side half of the
+        // server's sandbox CSP: the preview stays a static document even if that header regressed.
+        <iframe
+          src={rawHref}
+          title={entry.path}
+          sandbox=""
+          data-slot="file-preview-html"
+          className="h-[70vh] w-full bg-card"
+        />
       ) : kind === 'too-large' ? (
         <CenteredState
           icon={<FileWarningIcon />}
@@ -189,17 +228,53 @@ function FileEntryView({
           title="Binary file"
           subtitle={`${formatFileSize(entry.size)} of binary data — no text preview.`}
         />
-      ) : markdown && mode === 'rendered' ? (
-        // The thread's own Markdown component: the same single Shiki for fences and the same
-        // link-safety policy, which a repository README needs for exactly the same reason agent
-        // output does. A second Streamdown configuration here would be two renderers to keep honest.
-        <div data-slot="file-preview-markdown" className="px-4 py-3">
-          <Markdown>{entry.content ?? ''}</Markdown>
-        </div>
       ) : (
         <CodeLines path={entry.path} text={entry.content ?? ''} />
       )}
     </Pane>
+  )
+}
+
+/** The markdown preview's `Rendered | Source` segmented toggle — the diff facade's ModeButton
+ *  grammar (diff-controls.tsx), kept in the same visual language. */
+function ViewToggle({
+  mode,
+  onModeChange,
+}: {
+  mode: 'rendered' | 'source'
+  onModeChange: (mode: 'rendered' | 'source') => void
+}) {
+  const buttonClass = (active: boolean) =>
+    cn(
+      'rounded-[5px] px-2 py-0.5 text-[11px] font-medium',
+      active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
+    )
+  return (
+    <span
+      data-slot="file-preview-view-toggle"
+      role="group"
+      aria-label="Markdown view"
+      className="flex shrink-0 items-center rounded-md border border-border p-0.5"
+    >
+      <button
+        type="button"
+        data-view="rendered"
+        aria-pressed={mode === 'rendered'}
+        className={buttonClass(mode === 'rendered')}
+        onClick={() => onModeChange('rendered')}
+      >
+        Rendered
+      </button>
+      <button
+        type="button"
+        data-view="source"
+        aria-pressed={mode === 'source'}
+        className={buttonClass(mode === 'source')}
+        onClick={() => onModeChange('source')}
+      >
+        Source
+      </button>
+    </span>
   )
 }
 

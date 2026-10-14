@@ -53,6 +53,10 @@
     "yaml": "^2.5.0",
     "zod": "^4.4.3"
   },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^2.1.1",
+    "node-pty": "1.0.0"
+  },
   "devDependencies": {
     "@open-mercato/cezar-api-client": "^0.15.2",
     "@open-mercato/cezar-contract": "^0.15.2",
@@ -71,8 +75,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "optionalDependencies": {
-    "@napi-rs/keyring": "^2.1.1"
   }
 }

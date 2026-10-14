@@ -58,8 +58,9 @@ export interface EditorDraft {
   /** Inline steps that are not a single skill (a stored plan, a CLI definition), carried through
    *  untouched until the picker replaces them. */
   customSteps: TaskSteps | null
-  /** `null` = never touched: the project's default runner shows through the pill. */
-  runner: Runner | null
+  /** `null` = never touched: the project's default runner shows through the pill. `auto` rides
+   *  verbatim — the launch resolves it (spec 2026-10-12-auto-provider-selection). */
+  runner: Runner | 'auto' | null
   /** `null` = follow the project's account selection; otherwise an agent account id of `runner`. */
   account: string | null
   /** `null` = never touched; `''` = auto, explicitly. */
@@ -234,7 +235,12 @@ const isRunner = (value: string): value is Runner =>
   value === 'opencode' ||
   value === 'cursor' ||
   value === 'pi' ||
-  value === 'copilot'
+  value === 'copilot' ||
+  value === 'ollama'
+
+/** A named runner REQUEST — a concrete backend, or `auto` (the launch resolves it). Both claim
+ *  the task's backend choice, so both clear a template-inherited account. */
+const isRunnerRequest = (value: string): value is Runner | 'auto' => value === 'auto' || isRunner(value)
 
 /** "Use this": the template fills name, kind, trigger, prompt and task; everything else stays. */
 export function applyTemplate(draft: EditorDraft, template: TemplatePick): EditorDraft {
@@ -247,9 +253,10 @@ export function applyTemplate(draft: EditorDraft, template: TemplatePick): Edito
     intervalSeconds: template.intervalSeconds ?? draft.intervalSeconds,
     prompt: template.prompt,
     ...(template.workflow ? pickSource({ source: 'workflow', ref: template.workflow }) : {}),
-    runner: template.runner !== undefined && isRunner(template.runner) ? template.runner : draft.runner,
+    runner:
+      template.runner !== undefined && isRunnerRequest(template.runner) ? template.runner : draft.runner,
     // An account belongs to one runner; a template that names a runner must not inherit it.
-    account: template.runner !== undefined && isRunner(template.runner) ? null : draft.account,
+    account: template.runner !== undefined && isRunnerRequest(template.runner) ? null : draft.account,
     model: template.model ?? draft.model,
     autonomous: template.autonomous ?? draft.autonomous,
     dispatch: template.dispatch !== undefined,

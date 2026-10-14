@@ -39,8 +39,12 @@ export const workflowStepSchema = z
      *  right one, and rejecting `claude-cli` here is a loud load-time error rather than
      *  data loss. It also gates the persisted `workflowDef` (`runs/store.ts`), but nothing
      *  has ever been able to write the legacy id THERE either, because this same enum was
-     *  the only way in: there is no legacy shape to keep parseable. */
-    runner: z.enum(RUNNER_IDS).optional(),
+     *  the only way in: there is no legacy shape to keep parseable.
+     *
+     *  `auto` is the one widened value (spec 2026-10-12-auto-provider-selection Q2): like the
+     *  composer's, it is an intake request the engine resolves to a concrete runner at the
+     *  step's own launch — never persisted as a step or run runner. */
+    runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
     // check step

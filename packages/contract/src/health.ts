@@ -1,8 +1,20 @@
 import { z } from 'zod';
 
 /** The agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'ollama']);
 export type Runner = z.infer<typeof runnerSchema>;
+
+/**
+ * The runner a caller may REQUEST: the concrete backends, or `auto` — cezar picks the cheapest
+ * capable provider at launch and fails over on exhaustion (spec
+ * `.ai/specs/2026-10-12-auto-provider-selection.md` Q2). Deliberately beside — never inside —
+ * {@link runnerSchema}: `auto` is an intake value that the server resolves to a concrete runner
+ * BEFORE anything launches, so it never joins the runner identity a record, a session or a
+ * persisted step carries. Used only where a request body (run creation, dispatch child orders,
+ * workflow step/node authoring) or the echo of one (automation definitions) names the choice.
+ */
+export const runnerRequestSchema = z.enum([...runnerSchema.options, 'auto']);
+export type RunnerRequest = z.infer<typeof runnerRequestSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */
 export const repoInfoSchema = z.object({
@@ -14,7 +26,7 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'gh', 'git']),
+  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'ollama', 'gh', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
@@ -55,6 +67,12 @@ export const capabilitiesSchema = z.object({
    * no prompt mentions dispatching.
    */
   dispatch: z.boolean(),
+  /**
+   * `true` means the web Terminal tab exists (spec `.ai/specs/2026-10-10-terminal-tab.md`) —
+   * opt-in via `CEZ_TERMINAL=1`, off by default, and force-off under `CEZ_DRY_RUN=1`. Off, the
+   * nav item is absent and the `/terminal/session` route answers `409`.
+   */
+  terminal: z.boolean(),
   /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation

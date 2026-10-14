@@ -226,6 +226,52 @@ describe('Diff facade — image previews (#365)', () => {
   })
 })
 
+describe('Diff facade — binary files with previewable bytes', () => {
+  const PDF: DiffFileChange = { path: 'docs/spec.pdf', status: 'added', adds: 0, dels: 0, binary: true, patch: '' }
+  const AUDIO: DiffFileChange = { path: 'assets/cue.mp3', status: 'added', adds: 0, dels: 0, binary: true, patch: '' }
+  const DELETED_PDF: DiffFileChange = { ...PDF, path: 'docs/gone.pdf', status: 'deleted' }
+
+  it('renders a changed pdf as an embedded viewer from imageSrc instead of the binary note', async () => {
+    const imageSrc = vi.fn((path: string) => `/api/v1/runs/r1/files?path=${path}&raw=1`)
+    await renderDiff(<Diff files={[PDF]} imageSrc={imageSrc} />, 'docs/spec.pdf')
+
+    const embed = document.querySelector('[data-slot="diff-file-embed"]')
+    expect(embed?.getAttribute('data-kind')).toBe('pdf')
+    expect(embed?.getAttribute('src')).toBe('/api/v1/runs/r1/files?path=docs/spec.pdf&raw=1')
+    expect(screen.queryByText('Binary file — no text diff.')).toBeNull()
+  })
+
+  it('renders an audio file as a playable element', async () => {
+    await renderDiff(<Diff files={[AUDIO]} imageSrc={(path) => `/raw/${path}`} />, 'assets/cue.mp3')
+
+    expect(document.querySelector('[data-slot="diff-file-embed"][data-kind="audio"]')).not.toBeNull()
+  })
+
+  it('keeps the honest note for a binary file with no previewable extension', async () => {
+    const blob: DiffFileChange = {
+      path: 'assets/model.bin',
+      status: 'added',
+      adds: 0,
+      dels: 0,
+      binary: true,
+      patch: '',
+    }
+    await renderDiff(<Diff files={[blob]} imageSrc={(path) => `/raw/${path}`} />, 'assets/model.bin')
+
+    expect(screen.getByText('Binary file — no text diff.')).not.toBeNull()
+    expect(document.querySelector('[data-slot="diff-file-embed"]')).toBeNull()
+  })
+
+  it('never renders an embed for a deleted pdf — only the new side is ever servable', async () => {
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    await renderDiff(<Diff files={[DELETED_PDF]} imageSrc={imageSrc} />, 'docs/gone.pdf')
+
+    expect(document.querySelector('[data-slot="diff-file-embed"]')).toBeNull()
+    expect(imageSrc).not.toHaveBeenCalled()
+    expect(screen.getByText(/only the new side can be previewed/)).not.toBeNull()
+  })
+})
+
 /**
  * The regression this file's PNG-only fixtures let through: `image` is set from the path's
  * EXTENSION, so an SVG git diffs as TEXT (`binary: false`, real +N/−M) arrives flagged

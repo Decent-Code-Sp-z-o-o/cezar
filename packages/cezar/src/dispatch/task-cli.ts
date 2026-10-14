@@ -12,6 +12,14 @@ import { parseArgs } from 'node:util';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
+/**
+ * What a task order may name as its runner: the concrete backends, or `auto` — cezar picks the
+ * cheapest capable provider at launch and fails over on exhaustion (spec
+ * `.ai/specs/2026-10-12-auto-provider-selection.md` Q2). `auto` is an intake value only: it is
+ * stored verbatim and resolved by the server when the child starts, never here.
+ */
+const RUNNER_REQUESTS = [...RUNNER_IDS, 'auto'] as const;
+
 export interface TaskCliEnv {
   CEZ_API_URL?: string;
   CEZ_PROJECT_ID?: string;
@@ -28,7 +36,9 @@ const USAGE = `cez task — dispatch cezar tasks from inside a task (on by defau
 
   cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch|run>]
                   [--scope "…"] [--budget <usd>] [--success "…"] [--evidence "…"] [--tools A,B]
-                  [--runner ${RUNNER_IDS.join('|')}] [--model <model>] [--retry-limit <0-3>]
+                  [--runner ${RUNNER_IDS.join('|')}|auto] [--model <model>] [--retry-limit <0-3>]
+                  --runner auto: cezar picks the cheapest capable provider at launch and fails over
+                  to another provider on exhaustion
   cez task report --status done|partial|failed|blocked --result "…" [--evidence "…"]…
                   [--verdict approve|changes|reject] [--suggestions "…"]… [--confidence <0-1>]
                   [--side-effect "…"]… [--error "…"]… [--next "…"]
@@ -107,6 +117,9 @@ export async function runTaskCommand(
         const objective = positionals.join(' ').trim();
         if (!objective) throw new Error('an objective is required: cez task create "<objective>"');
         if (!env.CEZ_TASK_ID) throw new Error('CEZ_TASK_ID is not set — only a running task can dispatch');
+        if (values.runner && !(RUNNER_REQUESTS as readonly string[]).includes(values.runner)) {
+          throw new Error(`--runner must be one of ${RUNNER_REQUESTS.join(', ')}`);
+        }
         const body = {
           objective,
           ...(values.title ? { title: values.title } : {}),

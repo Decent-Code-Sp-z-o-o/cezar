@@ -103,6 +103,9 @@ export const agentAccountSelectionSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  // Present so a stored selection can name any provider, but ollama can never carry a second
+  // account (no login, no config dir) — the value stays unset in practice.
+  ollama: z.string().optional(),
 });
 export type AgentAccountSelection = z.infer<typeof agentAccountSelectionSchema>;
 

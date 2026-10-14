@@ -4,6 +4,7 @@ import type {
 } from '@open-mercato/cezar-contract';
 import { readTrackerAssociation } from '../../tracker-association.ts';
 import { createDryTrackerClient } from './dry-run.ts';
+import { createBacklogClient } from './backlog.ts';
 import { createJiraClient } from './jira.ts';
 import { createLinearClient } from './linear.ts';
 import { TrackerConnections } from './connections.ts';
@@ -49,6 +50,10 @@ export function createTrackerService(env: NodeJS.ProcessEnv = process.env, fetch
         linear: () => {
           if (record?.credentials.kind !== 'linear') throw new Error('Invalid connection');
           return createLinearClient({ key: record.credentials.key }, fetcher);
+        },
+        backlog: () => {
+          if (record?.credentials.kind !== 'backlog') throw new Error('Invalid connection');
+          return createBacklogClient({ root, dir: record.credentials.dir });
         },
       };
       entry = { root, provider: demo ? createDryTrackerClient(kind) : factories[kind]() };
@@ -141,6 +146,11 @@ export function createTrackerService(env: NodeJS.ProcessEnv = process.env, fetch
           const result = await driver.pollEvents!(input);
           await assertCurrent();
           return result;
+        } } : {}),
+        ...(driver.completeItem ? { completeItem: async (id: string) => {
+          await assertCurrent();
+          const result = await driver.completeItem!(id);
+          return await current() ? result : changed();
         } } : {}),
         async getItem(id) {
           if (!await current()) return changed();

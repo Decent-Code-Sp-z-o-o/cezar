@@ -10,7 +10,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { RUNNERS } from '@/routes/new-task-form'
+import { AUTO_RUNNER, RUNNERS, type ComposerRunner } from '@/routes/new-task-form'
 
 /**
  * The composer's single-choice pill, factored out of new-task.tsx (#401) so the follow-up
@@ -186,7 +186,7 @@ export interface RunnerAccountChoice {
 }
 
 /** How one row of the pill's menu is addressed: the agent, and which of its logins. */
-const choiceValue = (runner: Runner, account: string | null): string =>
+const choiceValue = (runner: ComposerRunner, account: string | null): string =>
   account === null ? runner : `${runner}:${account}`
 
 /**
@@ -216,15 +216,21 @@ export function RunnerPill({
   runners,
   value,
   onPick,
+  withAuto = false,
   disabled = false,
   accounts = [],
   account = null,
   repoAccount,
 }: {
   runners: readonly Runner[]
-  value: Runner
+  value: ComposerRunner
   /** `account` is `null` only while the repo's own choice is still the one in force. */
-  onPick: (runner: Runner, account: string | null) => void
+  onPick: (runner: ComposerRunner, account: string | null) => void
+  /** Lead the menu with the Auto card (`AUTO_RUNNER`, spec 2026-10-12-auto-provider-selection
+   *  § UI/UX). Off by default because the Continue pills reuse this component and the continue
+   *  path has no auto resolution — the request is resolved at launch only, so letting a
+   *  reopened session ask for it would send a value nothing answers. */
+  withAuto?: boolean
   disabled?: boolean
   /** Every login for every runner, discovered accounts included. Empty = the zero-config host. */
   accounts?: readonly RunnerAccountChoice[]
@@ -234,23 +240,28 @@ export function RunnerPill({
   repoAccount?: Partial<Record<Runner, string>>
 }) {
   const available = RUNNERS.filter((r) => runners.includes(r.id))
-  const options = available.flatMap((runner) => {
-    const logins = accounts.filter((entry) => entry.provider === runner.id)
-    // One login is not a choice, so it does not become a row of its own — the agent is the row.
-    if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id, desc: runner.desc }]
-    return logins.map((login) => ({
-      value: choiceValue(runner.id, login.id),
-      label: `${runner.id} · ${login.label}`,
-      // The folder, because the label is cezar's invention and the folder is the account.
-      desc: login.configDir,
-    }))
-  })
+  // The Auto card leads when offered, before every concrete row — and carries no login rows of
+  // its own: a request that names no backend has no account to pick.
+  const options = [
+    ...(withAuto ? [{ value: AUTO_RUNNER.id, label: AUTO_RUNNER.label, desc: AUTO_RUNNER.desc }] : []),
+    ...available.flatMap((runner) => {
+      const logins = accounts.filter((entry) => entry.provider === runner.id)
+      // One login is not a choice, so it does not become a row of its own — the agent is the row.
+      if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id, desc: runner.desc }]
+      return logins.map((login) => ({
+        value: choiceValue(runner.id, login.id),
+        label: `${runner.id} · ${login.label}`,
+        // The folder, because the label is cezar's invention and the folder is the account.
+        desc: login.configDir,
+      }))
+    }),
+  ]
 
   // What is selected right now: the override if the user made one, else whatever the repo resolves
   // to, else the discovered account. Falls back to the plain runner row for an agent with one login
   // — and for an override naming an account that has since been deleted, which must not leave the
-  // pill pointing at nothing.
-  const selected = account ?? repoAccount?.[value] ?? DEFAULT_AGENT_ACCOUNT_ID
+  // pill pointing at nothing. `auto` sits outside all of that: no backend, so no account anywhere.
+  const selected = value === 'auto' ? null : account ?? repoAccount?.[value] ?? DEFAULT_AGENT_ACCOUNT_ID
   const value_ = options.some((option) => option.value === choiceValue(value, selected))
     ? choiceValue(value, selected)
     : choiceValue(value, null)
@@ -264,7 +275,7 @@ export function RunnerPill({
       disabled={disabled}
       onPick={(next) => {
         const [runner, picked] = next.split(':')
-        onPick(runner as Runner, picked ?? null)
+        onPick(runner as ComposerRunner, picked ?? null)
       }}
       options={options}
     />

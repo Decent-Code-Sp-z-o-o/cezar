@@ -38,6 +38,22 @@ delete process.env.GH_HOST
 // case that deletes it cannot hand the next case the default-on namer.
 process.env.CEZ_AUTONAME = '0'
 
+// The desktop cockpit exports `CEZ_DISCLAIM_EXEC`, and every agent spawn under it — engine
+// tests included, via the inherited environment — goes through the trampoline. On a case-
+// sensitive/external volume the trampolined process can be denied the mock script itself
+// (EPERM on `open`), which presents as every dry-run suite failing with "CLI exited with
+// code 1" before a single scripted turn runs. Tests want the direct spawn CI gets: without
+// the variable the disclaim wrapper is a no-op. Forced at load and re-pinned per case, the
+// same way `CEZ_AUTONAME` is.
+delete process.env.CEZ_DISCLAIM_EXEC
+
+const pinDisclaimOff = (): void => {
+  delete process.env.CEZ_DISCLAIM_EXEC
+}
+
+beforeEach(pinDisclaimOff)
+afterEach(pinDisclaimOff)
+
 const pinAutonameOff = (): void => {
   if (process.env.CEZ_AUTONAME === undefined) process.env.CEZ_AUTONAME = '0'
 }

@@ -6,6 +6,8 @@ import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-c
 import {
   buildAutomationTask,
   availableRunners,
+  AUTO_MODEL_ROW,
+  AUTO_RUNNER,
   buildCreateRunBody,
   MODELS_BY_RUNNER,
   modelsForRunner,
@@ -15,6 +17,7 @@ import {
   resolveModel,
   resolveRunner,
   resolveSource,
+  RUNNERS,
   sourceExists,
   startedRunPath,
   type TaskSource,
@@ -164,7 +167,9 @@ describe('model option resolution', () => {
     // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
     // list is the single source both the route and the picker compile against — this asserts they
     // still agree on who discovers, and that a runner is never added to it by accident.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
+    // #794 gave OpenCode a catalog, #784 Claude, #807 Cursor — and ollama reads its model
+    // library straight off the running server (`GET /api/tags`), so it discovers too.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'ollama'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
@@ -254,6 +259,58 @@ describe('model option resolution', () => {
     expect(resolveModel(null, 'codex', defaults)).toBe('not-a-preset')
     // No preset for the runner → auto, exactly as before.
     expect(resolveModel(null, 'opencode', defaults)).toBe('')
+  })
+})
+
+describe('the Auto runner (spec 2026-10-12-auto-provider-selection)', () => {
+  it('keeps the concrete catalog concrete, and the Auto card a separate pick', () => {
+    // `RUNNERS` is read by surfaces that name a runner that must exist (settings defaults,
+    // hand-to-agent, the dispatch subtask engine) — `auto` is a request, not a backend (Q2).
+    expect(RUNNERS.map((r) => r.id)).not.toContain('auto')
+    expect(AUTO_RUNNER).toMatchObject({ id: 'auto', label: 'auto' })
+    expect(AUTO_RUNNER.desc).toBe(
+      'Cheapest capable provider, chosen at launch; fails over if the provider runs out',
+    )
+  })
+
+  it('the model picker under auto is the single launch-resolved row — no catalog, no stale pins', () => {
+    expect(modelsForRunner('auto')).toEqual([{ id: '', label: 'auto', desc: AUTO_MODEL_ROW }])
+    // A live catalog and a model pinned on another runner are both ignored: the launch picks
+    // the model itself, so nothing the user pinned on a concrete runner may survive as a pin.
+    expect(
+      modelsForRunner(
+        'auto',
+        { runner: 'claude', models: [{ id: 'opus', label: 'Opus', description: 'Opus 5' }], source: 'live', stale: false },
+        ['sonnet'],
+      ),
+    ).toEqual([{ id: '', label: 'auto', desc: AUTO_MODEL_ROW }])
+  })
+
+  it('modelConflictsWithRunner: auto names no model, so nothing can contradict it', () => {
+    expect(modelConflictsWithRunner('claude-opus-4-8', 'auto')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-6', 'auto')).toBe(false)
+    expect(modelConflictsWithRunner('', 'auto')).toBe(false)
+  })
+
+  it('resolveModel under auto is always the empty pick — no model flag is pinned', () => {
+    expect(resolveModel(null, 'auto')).toBe('')
+    expect(resolveModel('', 'auto')).toBe('')
+    // A stale pin from a concrete runner, and a configured per-runner default, are both ignored:
+    // the launch resolves provider AND model together.
+    expect(resolveModel('sonnet', 'auto', { claude: 'opus' })).toBe('')
+    expect(resolveModel(null, 'auto', { claude: 'opus' })).toBe('')
+  })
+
+  it('the request goes on the wire verbatim — the client never resolves it', () => {
+    const body = buildCreateRunBody({
+      task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',
+      runner: 'auto', defaultRunner: 'claude', variants: 1, images: [],
+    })
+    expect(body.runner).toBe('auto')
+    // Exactly like a concrete runner over the wire: one key, the value the user picked.
+    expect(JSON.parse(JSON.stringify(body))).toMatchObject({ workflow: 'quick-task', runner: 'auto' })
+    // And no model with it — `auto` names none; the launch picks both together.
+    expect(body.model).toBeUndefined()
   })
 })
 

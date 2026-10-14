@@ -107,6 +107,7 @@ describe('the workspace settings API (step 2.7)', () => {
         idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
+        autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 },
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
       },
@@ -303,6 +304,7 @@ describe('the workspace settings API (step 2.7)', () => {
         idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
+        autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 },
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
       },
@@ -322,6 +324,32 @@ describe('the workspace settings API (step 2.7)', () => {
     // asks, not just the file.
     expect(semaphore.autoResumeOnUsageLimit()).toBe(false);
     expect(semaphore.memoryLimitMb()).toBe(2048);
+  });
+
+  it('PUT resources.autoProvider merges per key, echoes resolved, and reaches the engine hot (spec 2026-10-12 Q6)', async () => {
+    expect(semaphore.autoProvider()).toEqual({ enabled: true, maxFailovers: 3, maxWaitMinutes: 10 });
+    // A PARTIAL patch: one knob, not the whole object.
+    const res = await putConfig({ resources: { autoProvider: { maxWaitMinutes: 45 } } });
+    expect(res.status).toBe(200);
+    // The echo answers the RESOLVED object — the other keys kept their values.
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.autoProvider).toEqual({
+      enabled: true,
+      maxFailovers: 3,
+      maxWaitMinutes: 45,
+    });
+    // The raw file holds the MERGED object — materialized on write like every other resources
+    // key (the mutator edits the parsed config), so an older cezar reading it sees whole values.
+    expect((rawConfig().resources as Record<string, unknown>).autoProvider).toEqual({
+      enabled: true,
+      maxFailovers: 3,
+      maxWaitMinutes: 45,
+    });
+    // Hot, without a restart — the cache the failover gate asks.
+    expect(semaphore.autoProvider()).toEqual({ enabled: true, maxFailovers: 3, maxWaitMinutes: 45 });
+    // And the off-switch behaves like every other resource key.
+    const off = await putConfig({ resources: { autoProvider: { enabled: false } } });
+    expect(off.status).toBe(200);
+    expect(semaphore.autoProvider().enabled).toBe(false);
   });
 
   it('#1232 PUT idle timeout persists, reloads, and reaches the live semaphore', async () => {
@@ -364,6 +392,7 @@ describe('the workspace settings API (step 2.7)', () => {
       idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
+      autoProvider: { enabled: true, maxFailovers: 3, maxWaitMinutes: 10 },
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,
     });

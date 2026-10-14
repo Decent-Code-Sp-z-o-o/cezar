@@ -28,6 +28,10 @@ skills-lock.json
 # local symlink into .agents/skills
 .claude/skills
 
+# mimosa security-scan hook state (per-session scratch, machine-local — was accidentally
+# committed once and churned every git status; the directory itself stays on disk)
+.mimosa/
+
 # mock-agent output from dry-run e2e (scripts/mock-claude.mjs appends here)
 /notes.md
 .e2e/results/
@@ -40,3 +44,4 @@ skills-lock.json
 .e2e/logs/
 .e2e/videos/
 .e2e/cez-home/
+packages/web/.mimosa/

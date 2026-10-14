@@ -15,7 +15,7 @@ export const E2E_SETUP_WORKFLOW_NAME = 'e2e-setup';
  * wire. Stored as a project secret with the `checks` audience, so it reaches the check steps
  * that run `e2e` and never an agent session.
  */
-export const E2E_CREDENTIAL_NAMES = ['AI_GATEWAY_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'] as const;
+export const E2E_CREDENTIAL_NAMES = ['AI_GATEWAY_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_API_KEY'] as const;
 export const e2eCredentialNameSchema = z.enum(E2E_CREDENTIAL_NAMES);
 export type E2eCredentialName = z.infer<typeof e2eCredentialNameSchema>;
 

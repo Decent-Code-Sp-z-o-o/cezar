@@ -51,6 +51,13 @@ export const workspaceConfigResponseSchema = z.object({
     monitoringWakeIntervalMinutes: z.number().nullable(),
     /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
     autoResumeOnUsageLimit: z.boolean(),
+    /** Auto provider selection (spec 2026-10-12-auto-provider-selection Q6), always resolved —
+     *  the echo materializes the schema defaults on every answer like every other key here. */
+    autoProvider: z.object({
+      enabled: z.boolean(),
+      maxFailovers: z.number(),
+      maxWaitMinutes: z.number(),
+    }),
     memoryLimitMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
   }),
@@ -72,6 +79,7 @@ export const workspaceConfigResponseSchema = z.object({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      ollama: z.string().optional(),
     }).optional(),
   }),
 });
@@ -111,6 +119,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           cursor: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
           copilot: z.string().trim().min(1).max(200).nullable().optional(),
+          ollama: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
     })
@@ -122,6 +131,15 @@ export const setWorkspaceConfigInputSchema = z.object({
       idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
       autoResumeOnUsageLimit: z.boolean().optional(),
+      /** Auto provider selection (spec 2026-10-12-auto-provider-selection Q6). Partial: keys
+       *  absent from the patch keep their current value. */
+      autoProvider: z
+        .object({
+          enabled: z.boolean().optional(),
+          maxFailovers: z.number().int().min(0).max(10).optional(),
+          maxWaitMinutes: z.number().int().min(0).max(1440).optional(),
+        })
+        .optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
     })
@@ -292,6 +310,7 @@ export const workspaceUiStateSchema = z.looseObject({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      ollama: z.string().optional(),
     })
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
@@ -350,6 +369,7 @@ export const setWorkspaceUiStateInputSchema = z
         pi: z.string().min(1).max(128).optional(),
         junie: z.string().min(1).max(128).optional(),
         copilot: z.string().min(1).max(128).optional(),
+        ollama: z.string().min(1).max(128).optional(),
       })
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
@@ -581,7 +601,7 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'ollama']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;

@@ -203,6 +203,41 @@ describe('a run stopped by a usage limit resumes itself', () => {
       .toBeUndefined();
   }, 40_000);
 
+  it('stamps the engine-authored resume prompt, which still reaches the agent verbatim', async () => {
+    // The engine, not the user, writes the resume prompt — the thread must never render it as a
+    // bubble the user typed (thread-state folds `engineAuthored` away), so the persisted
+    // `user-message` has to carry the marker while the text stays untouched.
+    const first = new RunManager(store, repoRoot);
+    const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
+    await settle(record.id);
+    first.dispose();
+
+    store.updateRun(record.id, {
+      autoResumeAt: new Date(Date.now() - 1_000).toISOString(),
+      task: 'mock:done ship it',
+    });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+
+    await expect
+      .poll(
+        () =>
+          store
+            .readEvents(record.id)
+            .some((event) => event.type === 'user-message' && event.stepId === 'continue-1'),
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+    const opening = store
+      .readEvents(record.id)
+      .find((event) => event.type === 'user-message' && event.stepId === 'continue-1');
+    expect(opening?.engineAuthored).toBe(true);
+    // The queued resume re-attaches the task text (#472); the engine prompt leads verbatim.
+    expect(String(opening?.text).startsWith(
+      'The provider usage limit that interrupted this task has reset. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.',
+    )).toBe(true);
+  }, 40_000);
+
   it('holds the queue while the account is limited — the rest never start', async () => {
     // The reported scenario: five tasks, two slots. The two that start hit the limit and become
     // `scheduled`; the other three must not be walked into the same wall just to be marked

@@ -49,6 +49,7 @@
  */
 
 import { followupsEnabled } from '../handoff.ts';
+import { terminalEnabled } from './terminal.ts';
 import type { Capabilities } from '@open-mercato/cezar-contract';
 
 /** Every IPv4 address in 127.0.0.0/8, anchored. Anchoring is load-bearing: a
@@ -168,6 +169,12 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
     dispatch: env.CEZ_DISPATCH !== '0',
+    // Web terminal (spec 2026-10-10-terminal-tab): opt-in, exact `1`, and dry-run
+    // forces it off — the offline/mock contract must never grow a live shell. The
+    // route enforces the same predicate (defense in depth) and the hub behind it
+    // reads it too, so flipping the env mid-process takes the surface down at all
+    // three layers on the next request; only already-open sockets would linger.
+    terminal: terminalEnabled(env),
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

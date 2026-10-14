@@ -5,6 +5,7 @@ import {
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus,
 } from '@open-mercato/cezar-contract';
+import { requestFailure } from './tracker/transport.ts';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
@@ -56,7 +57,6 @@ import {
   type PickVariantResponse,
   type RunIndexEntry,
   type RunsIndexResponse,
-  type StarCountPayload,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
   githubListQuerySchema,
@@ -70,6 +70,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { terminalSessionBodySchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -79,6 +80,7 @@ import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
+import { discoverOllamaModels } from '../core/ollama-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
   PROVIDER_IDS,
@@ -122,7 +124,6 @@ import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
 import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
-import { StarCountReader } from './star-count.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -172,7 +173,9 @@ import {
   imageMimeType,
   isOsOpenableImage,
   listRepoPaths,
+  previewMimeType,
   pushCurrentBranch,
+  RAW_PREVIEW_CAP,
   worktreeGitStatus,
   readWorktreePath,
   repoIndexContains,
@@ -238,6 +241,7 @@ import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../pa
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
+import { createTerminalHub, terminalEnabled, type TerminalHub } from './terminal.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { isGithubHost } from '../github-hosts.ts';
@@ -373,15 +377,17 @@ export interface ServerDeps {
    *  the CLI, which knows the entry file, the port and how to restart; absent in tests and for
    *  bare `createApp` callers, where the family answers a read-only "not available" status. */
   selfUpdate?: SelfUpdateService;
-  /** cezar's own GitHub star count behind `GET /api/v1/star-count` (the cockpit's ⭐ ask).
-   *  Defaults to a reader that asks github.com at most once per ten seconds, paced to GitHub's rate limit, and caches the answer
-   *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
-  starCount?: { read(): Promise<StarCountPayload> };
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
    *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
   socketHub?: SocketHub;
+  /** Web terminal hub (src/server/terminal.ts, spec 2026-10-10-terminal-tab).
+   *  `createApp` calls only `issue()` from the session route — `startServer`
+   *  builds one and wires its `handleUpgrade` as the socket hub's upgrade
+   *  delegate. Optional for the same reason as `socketHub`: tests and legacy
+   *  callers get a private hub whose HTTP half still answers. */
+  terminalHub?: TerminalHub;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
    *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
    *  container object, for instance) that CI machines do not have. */
@@ -694,8 +700,11 @@ const startRunSchema = z
     // (~25k tokens) is well past any hand-written task.
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
-    // Agent backend for this task (falls back to config `defaultRunner`).
-    runner: z.enum(RUNNER_IDS).optional(),
+    // Agent backend for this task (falls back to config `defaultRunner`). `auto` asks cezar to
+    // pick the cheapest capable provider at launch and fail over on exhaustion (spec
+    // 2026-10-12-auto-provider-selection Q2) — resolved before anything spawns, so the persisted
+    // record always carries a concrete runner plus the `runnerRequest` echo.
+    runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
     // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
     // own selection, then the discovered default. Bounded like a profile id in the workspace
     // schema, so a value this route accepts can never be degraded away by the next load.
@@ -978,7 +987,10 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: z.array(attachmentInputSchema).max(4).optional(),
-  runner: z.enum(RUNNER_IDS).optional(),
+  // The follow-up composer's runner override. `auto` re-resolves the choice for the reopened
+  // session at its own launch (spec 2026-10-12-auto-provider-selection) — the run's concrete
+  // backend switches only once the resolution lands.
+  runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
   model: z.string().max(200).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
    *  `POST /runs`' own `agentProfile`. Omitted = keep the account the run is already on. */
@@ -994,7 +1006,9 @@ const continueSchema = z.object({
 // absent so it never touches `task`.
 const startTodoSchema = z
   .object({
-    runner: z.enum(RUNNER_IDS).optional(),
+    // `auto` rides like any runner value (spec 2026-10-12-auto-provider-selection): resolved at
+    // launch, never persisted as the run's runner.
+    runner: z.enum([...RUNNER_IDS, 'auto'] as const).optional(),
     model: z.string().max(200).optional(),
     prompt: z
       .string()
@@ -1232,7 +1246,8 @@ const COMMIT_FORMATS = ['text/plain', 'application/json'] as const;
 
 /** What `GET /runs/:id/files` offers, DEFAULT FIRST. `image/*` rather than a concrete type: which
  *  image type the bytes are is only known once the path resolves, and the raw branch refuses
- *  everything that is not an image anyway. */
+ *  anything but images on the Accept path anyway — the wider preview types (pdf, video, audio,
+ *  html) are flag-driven (`?raw=1`) only, which is what the preview's `<iframe>`/`<video>` ask with. */
 const FILE_FORMATS = ['application/json', 'image/*'] as const;
 
 /** Workspace-root writability probe (multi-project spec, "API Contracts"):
@@ -1275,6 +1290,7 @@ export function createApp(deps: ServerDeps) {
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
+      ollama: { discover: () => discoverOllamaModels() },
     },
   });
   const providerAuth = deps.providerAuth
@@ -1352,7 +1368,6 @@ export function createApp(deps: ServerDeps) {
       readOnly: true,
       trimPaths: () => !capabilities().localHandoff,
     });
-  const starCount = deps.starCount ?? new StarCountReader();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -3206,12 +3221,6 @@ export function createApp(deps: ServerDeps) {
   // registry, so the request cannot inject code, and a VPS behind the installer's Basic auth
   // is exactly where "update from the cockpit" replaces `cezar server-deploy` — but hosted
   // applies are FORWARD-ONLY (see the guard on /apply below).
-  // ---- chained family: the star ask (workspace-level) ----------------------
-  // cezar's own star count, for the cockpit's ⭐ button. Workspace-level and single-mount, like
-  // `/health`: it says nothing about any project, and there is nothing for a project scope to
-  // change about it. Never fails — `{ available: false }` is the ordinary offline answer, so the
-  // cockpit's chip simply is not there rather than showing an error nobody asked for.
-  const starCountRoutes = new Hono().get('/star-count', async (c) => c.json(await starCount.read()));
 
   const selfUpdateRoutes = new Hono()
     .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
@@ -3306,6 +3315,7 @@ export function createApp(deps: ServerDeps) {
       idleTimeoutMinutes: config.resources.idleTimeoutMinutes,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
+      autoProvider: config.resources.autoProvider,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
@@ -3393,6 +3403,14 @@ export function createApp(deps: ServerDeps) {
           }
           if (resources?.autoResumeOnUsageLimit !== undefined) {
             config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
+          }
+          // Auto provider selection (spec 2026-10-12 Q6): merged per key over the current value,
+          // so a partial patch edits one knob without resetting the others.
+          if (resources?.autoProvider !== undefined) {
+            config.resources.autoProvider = {
+              ...config.resources.autoProvider,
+              ...resources.autoProvider,
+            };
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
@@ -3567,6 +3585,30 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
       return c.json(merged);
+    });
+
+  // ---- chained family: web terminal (project-scoped, opt-in CEZ_TERMINAL=1) ----
+  // One HTTP shape: the POST that mints a single-use upgrade token (spec
+  // 2026-10-10-terminal-tab). The terminal bytes never touch Hono — they ride the
+  // dedicated WS path the socket hub's delegate hands to `TerminalHub.handleUpgrade`
+  // (wired in `startServer`), because the upgrade event never reaches Hono at all.
+  // The gate is checked here AND in the hub AND in `capabilities()` (defense in
+  // depth): off — the default — the family answers 409 and nothing else exists.
+  const terminalHub = deps.terminalHub
+    ?? createTerminalHub({ verifyUpgrade: (req) => verifyWsUpgrade(req, bindHost) });
+  const terminalRoutes = new Hono<ProjectApiEnv>()
+    .post('/terminal/session', jsonZodValidator(terminalSessionBodySchema), (c) => {
+      if (!terminalEnabled()) {
+        return c.json({ error: 'the web terminal is disabled — set CEZ_TERMINAL=1 and restart cezar' }, 409);
+      }
+      const project = c.get('project');
+      const issued = terminalHub.issue({
+        projectId: project.id,
+        root: project.root,
+        cols: c.req.valid('json').cols,
+        rows: c.req.valid('json').rows,
+      });
+      return issued.status === 200 ? c.json(issued.body) : c.json({ error: issued.error }, issued.status);
     });
 
   // ---- chained family: workflows (project-scoped) --------------------------
@@ -3843,12 +3885,14 @@ export function createApp(deps: ServerDeps) {
 
   /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
    *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
-   *  reference does. */
+   *  reference does. A definition that asks for `runner: 'auto'` is not checkable HERE — the
+   *  account binds to the provider the launch resolves to — so it is accepted and the launch's
+   *  own profile resolution degrades a dangling id, exactly like a stored reference does. */
   const automationAccountIssue = async (
     root: string,
-    task: { runner?: ProviderId; agentProfile?: string },
+    task: { runner?: ProviderId | 'auto'; agentProfile?: string },
   ): Promise<string | null> => {
-    if (task.agentProfile === undefined) return null;
+    if (task.agentProfile === undefined || task.runner === 'auto') return null;
     const runner = task.runner ?? (await loadConfig(root)).defaultRunner;
     const account = await resolveWorkspaceProfile(runner, task.agentProfile);
     return 'error' in account ? account.error : null;
@@ -4415,7 +4459,7 @@ export function createApp(deps: ServerDeps) {
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
-      const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const fallback: ProviderId | 'auto' = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
       const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
         repoRoot,
         profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
@@ -4424,9 +4468,15 @@ export function createApp(deps: ServerDeps) {
       // A composer override names an account the user just picked, so a stale id (deleted since
       // the page loaded) is answered honestly instead of quietly running on the default — the
       // opposite of how RESOLUTION treats a dangling reference, and deliberately so: a run
-      // replaying a stored id has no better answer than the default, a user does.
-      if (parsed.data.agentProfile !== undefined) {
-        const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
+      // replaying a stored id has no better answer than the default, a user does. Skipped for
+      // `runner: 'auto'` (spec 2026-10-12-auto-provider-selection): the account binds to the
+      // provider the launch resolves to, which is not knowable here, and a dangling id at launch
+      // already degrades through the profile RESOLUTION's own fallback.
+      if (parsed.data.agentProfile !== undefined && parsed.data.runner !== 'auto') {
+        const account = await resolveWorkspaceProfile(
+          parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner,
+          parsed.data.agentProfile,
+        );
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
       const variants = parsed.data.variants ?? 1;
@@ -4679,11 +4729,11 @@ export function createApp(deps: ServerDeps) {
     })
 
     // "Finish": gracefully close a waiting session — the run completes as done.
-    .post('/runs/:id/finish', (c) => {
+    .post('/runs/:id/finish', async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      const finished = manager.finish(id);
+      const finished = await manager.finish(id);
       if (!finished) return c.json({ error: 'no open session' }, 409);
       return c.json({ finished: true });
     })
@@ -4700,18 +4750,24 @@ export function createApp(deps: ServerDeps) {
       if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
-      const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
-        repoRoot,
-        // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
-        profileFor: (provider) => parsed.data.agentProfile
-          ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
-      });
+      // `runner: 'auto'` gates nothing (spec 2026-10-12-auto-provider-selection): it names no
+      // provider to require — the continuation resolves against live availability at its own
+      // launch, so a 409 on any concrete guess would refuse a continue auto could serve.
+      const blocked = parsed.data.runner === 'auto'
+        ? null
+        : await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
+          repoRoot,
+          // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
+          profileFor: (provider) => parsed.data.agentProfile
+            ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
+        });
       if (blocked) return c.json({ error: blocked }, 409);
       // The follow-up pill names an account the user just picked, so an id that has been deleted
       // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
       // USER can act on "unknown account", and reopening the session on another login silently
-      // would cross the very billing boundary accounts exist to draw.
-      if (parsed.data.agentProfile !== undefined) {
+      // would cross the very billing boundary accounts exist to draw. Skipped for `auto` — the
+      // account binds to the provider the launch resolves to, which is not knowable here.
+      if (parsed.data.agentProfile !== undefined && parsed.data.runner !== 'auto') {
         const provider = providerForExistingRun(run, parsed.data.runner);
         const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
@@ -4996,9 +5052,12 @@ export function createApp(deps: ServerDeps) {
     // Files tab: directory listing (path omitted or a dir) or file content
     // (size-capped, binary flagged). Traversal-safe — readWorktreePath rejects
     // anything escaping the worktree. `raw=1` (R5 Step 1.6) serves the BYTES of
-    // image files only, for the preview's inline <img> — never HTML/JS/etc., so
-    // no worktree file can become a same-origin document, and never past the
-    // size cap. The no-script CSP neutralizes SVG opened as a top-level URL.
+    // the previewable file types (`PREVIEW_MIME` in git-changes.ts: images, pdf,
+    // video, audio, html) up to RAW_PREVIEW_CAP, for the preview's inline
+    // <img>/<iframe>/<video>/<audio>. The no-script + sandbox CSP and `nosniff`
+    // make every byte answer a unique-origin, script-less document — that is what
+    // earns `text/html` its allowlist entry: a worktree HTML file can never become
+    // a same-origin scriptable document, however it is opened.
     //
     // An `Accept` that asks for images reaches the same raw branch without the flag — which is
     // what an `<img>` sends — while the flag still wins whenever it is present and `*<slash>*`
@@ -5007,10 +5066,12 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const query = c.req.valid('query');
       c.header('vary', 'Accept');
+      // The FLAG is the only way to ask for the wider preview types; an `Accept` keeps
+      // negotiating images only — exactly the surface it negotiated before the allowlist widened.
+      const flagged = query.raw === '1';
+      // Present-but-not-`1` is an explicit opt-out: neither the flag nor Accept re-decides it.
       const wantsRaw =
-        query.raw !== undefined
-          ? query.raw === '1'
-          : negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*';
+        flagged || (query.raw === undefined && negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
@@ -5030,26 +5091,28 @@ export function createApp(deps: ServerDeps) {
         });
       }
       if (wantsRaw) {
-        const mime = imageMimeType(result.path);
-        if (mime === null || result.tooLarge) {
-          // `?raw=1` ASKED for bytes, so it hears why it cannot have them — that 409 and its
-          // wording are the protected surface (§2). An `Accept` is only a preference, so a
-          // resource with no image representation falls THROUGH to the JSON answer below rather
-          // than turning a browser's navigation to a text file into an error.
-          if (query.raw !== undefined) {
-            const error =
-              mime === null
-                ? `raw serving is limited to images: ${result.path}`
-                : `file too large to serve raw (${result.size} bytes): ${result.path}`;
-            return c.json({ error }, 409);
-          }
-        } else {
+        const preview = previewMimeType(result.path);
+        // Accept-negotiated asks stay on the image surface the `<img>` path relies on; the flag
+        // unlocks the wider preview allowlist (pdf, video, audio, html).
+        const allowed = preview !== null && (flagged || preview.kind === 'image');
+        if (allowed && result.size <= RAW_PREVIEW_CAP) {
           const bytes = await readFile(join(workingDirectory, result.path));
           return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
-            'content-type': mime,
+            'content-type': preview.mime,
             'x-content-type-options': 'nosniff',
             'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
           });
+        }
+        // `?raw=1` ASKED for bytes, so it hears why it cannot have them — that 409 and its
+        // wording are the protected surface (§2). An `Accept` is only a preference, so a
+        // resource it cannot be served falls THROUGH to the JSON answer below rather than
+        // turning a browser's navigation to a text file into an error.
+        if (flagged) {
+          const error =
+            preview === null
+              ? `raw serving is limited to previewable file types (images, pdf, video, audio, html): ${result.path}`
+              : `file too large to serve raw (${result.size} bytes): ${result.path}`;
+          return c.json({ error }, 409);
         }
       }
       return c.json({
@@ -5058,6 +5121,7 @@ export function createApp(deps: ServerDeps) {
         size: result.size,
         binary: result.binary,
         tooLarge: result.tooLarge,
+        ...(result.preview !== undefined ? { preview: result.preview } : {}),
         ...(result.content !== undefined ? { content: result.content } : {}),
       });
     })
@@ -5600,7 +5664,7 @@ export function createApp(deps: ServerDeps) {
           workflow = workflows.find((w) => w.name === 'quick-task') ?? QUICK_TASK_WORKFLOW;
         }
 
-        const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+        const fallback: ProviderId | 'auto' = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
         const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), { repoRoot });
         if (blocked) return c.json({ error: blocked }, 409);
 
@@ -6139,6 +6203,32 @@ export function createApp(deps: ServerDeps) {
       const result = await driver.getItem(c.req.valid('param').id);
       if (!result.available && result.code === 'not_found') return c.json({ error: result.reason }, 404);
       return c.json(result, 200);
+    })
+    .post('/tracker/:id/complete', paramZodValidator(trackerItemParamsSchema), queryZodValidator(trackerItemQuerySchema), async (c) => {
+      const project = c.get('project');
+      // A flip is a project mutation: serialize it against Connect/Disconnect like the rest.
+      return mutateTracker(project.dataDir, async () => {
+        const driver = await trackers.driver(project.root, project.dataDir);
+        // Unlike the read routes, a mutation never answers 200 with a failure envelope:
+        // an unconfigured or changed scope is a 409 the client can tell apart from success.
+        if ('available' in driver) return c.json({ error: driver.reason }, 409);
+        const { expectedScope } = c.req.valid('query');
+        if (expectedScope !== undefined && expectedScope !== trackerReadScope(driver.association)) {
+          return c.json({ error: 'This tracker connection or scope changed. Reload the tracker view.' }, 409);
+        }
+        if (!driver.completeItem) return c.json({ error: 'This tracker cannot complete items. Only the file-backed backlog provider ticks a checkbox.' }, 409);
+        try {
+          const result = await driver.completeItem(c.req.valid('param').id);
+          if (!result.available) {
+            return c.json({ error: result.reason }, result.code === 'not_found' ? 404 : 409);
+          }
+          trackerWatches.invalidateProject(project.root);
+          return c.json({ item: result.item }, 200);
+        } catch (error) {
+          const failure = requestFailure(error);
+          return c.json({ error: failure.reason }, failure.code === 'not_found' ? 404 : 409);
+        }
+      });
     });
 
   const githubRoutes = new Hono<ProjectApiEnv>()
@@ -6456,24 +6546,27 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: `not a regular file: ${result.path}` }, 409);
       }
       if (wantsRaw) {
-        const mime = imageMimeType(result.path);
-        if (mime === null || result.tooLarge) {
-          // `?raw=1` asked for bytes, so it hears why it cannot have them; a mere `Accept`
-          // preference falls through to the JSON answer. Same split as `/runs/:id/files`.
-          if (query.raw !== undefined) {
-            const error =
-              mime === null
-                ? `raw serving is limited to images: ${result.path}`
-                : `file too large to serve raw (${result.size} bytes): ${result.path}`;
-            return c.json({ error }, 409);
-          }
-        } else {
+        // The FLAG is the only way to ask for the wider preview types; an `Accept` keeps
+        // negotiating images only — exactly the surface it negotiated before the allowlist widened.
+        const preview = previewMimeType(result.path);
+        const allowed =
+          preview !== null && (query.raw === '1' || preview.kind === 'image') && result.size <= RAW_PREVIEW_CAP;
+        if (allowed) {
           const bytes = await readFile(join(info.root, result.path));
           return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
-            'content-type': mime,
+            'content-type': preview.mime,
             'x-content-type-options': 'nosniff',
             'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
           });
+        }
+        // `?raw=1` asked for bytes, so it hears why it cannot have them; a mere `Accept`
+        // preference falls through to the JSON answer. Same split as `/runs/:id/files`.
+        if (query.raw !== undefined) {
+          const error =
+            preview === null
+              ? `raw serving is limited to previewable file types (images, pdf, video, audio, html): ${result.path}`
+              : `file too large to serve raw (${result.size} bytes): ${result.path}`;
+          return c.json({ error }, 409);
         }
       }
       return c.json({
@@ -6484,6 +6577,7 @@ export function createApp(deps: ServerDeps) {
         size: result.size,
         binary: result.binary,
         tooLarge: result.tooLarge,
+        ...(result.preview !== undefined ? { preview: result.preview } : {}),
         ...(result.content !== undefined ? { content: result.content } : {}),
       });
     })
@@ -6758,7 +6852,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
     .route('/', configRoutes)
-    .route('/', agentConfigRoutes);
+    .route('/', agentConfigRoutes)
+    .route('/', terminalRoutes);
 
   // ---- chained family: the cross-project run index (workspace-level) -------
   /**
@@ -7050,7 +7145,6 @@ export function createApp(deps: ServerDeps) {
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
-    .route('/', starCountRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', workspaceSecretsRoutes)
     .route('/', fsBrowseRoutes)
@@ -7095,6 +7189,11 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
+  // The terminal hub rides the same pattern: startServer owns it (its upgrade
+  // half is wired as the socket hub's delegate below), createApp gets it to
+  // answer the session POST from the same instance the sockets speak to.
+  const terminalHub = deps.terminalHub
+    ?? createTerminalHub({ verifyUpgrade: (req) => verifyWsUpgrade(req, deps.bindHost) });
   const bootProjectId = deps.bootProjectId ?? 'default';
   // `pinned`: the boot project is served whether or not the registry holds it,
   // and since boot registration became seed-once it usually does NOT — then
@@ -7125,6 +7224,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     workspaceEvents,
     skillsUpdate,
     socketHub,
+    terminalHub,
     automationsChanged: () => rescheduleAutomations(),
   });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
@@ -7236,8 +7336,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
-  socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
+  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); terminalHub.close(); });
+  socketHub.attach(
+    server,
+    (req) => verifyWsUpgrade(req, deps.bindHost),
+    // One `upgrade` listener routes every path: the bus keeps `/api/v1/ws`,
+    // the terminal hub claims `/api/v1/p/:projectId/terminal/ws`, anything
+    // else is destroyed exactly as before.
+    (req, socket, head) => terminalHub.handleUpgrade(req, socket, head),
+  );
   return server;
 }
 

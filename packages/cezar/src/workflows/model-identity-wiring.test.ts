@@ -113,6 +113,34 @@ describe('model identity wiring (dry run)', () => {
     expect(store.getRun(id)?.modelIdentity).toBeUndefined();
   }, 30_000);
 
+  it('a backend-reported serving model lands on the record even with no pin', async () => {
+    // The real claude CLI names its resolved model in `system/init`; the mock
+    // only does so under this hook. An auto ask must stay pin-free on the wire
+    // while the record learns what actually served — the read path behind the
+    // composer's `auto - <model>` pill.
+    process.env.CEZ_MOCK_INIT_MODEL = 'claude-sonnet-4-5';
+    try {
+      const id = await runToEnd({ task: 'do the thing' });
+      expect(capturedModel()).toBeUndefined();
+      expect(store.getRun(id)?.modelIdentity).toBe('anthropic/claude-sonnet-4-5');
+      expect(store.getRun(id)?.steps.find((step) => step.id === 'work')?.modelIdentity).toBe(
+        'anthropic/claude-sonnet-4-5',
+      );
+    } finally {
+      delete process.env.CEZ_MOCK_INIT_MODEL;
+    }
+  }, 30_000);
+
+  it('a whitespace serving-model report lands nothing', async () => {
+    process.env.CEZ_MOCK_INIT_MODEL = '  ';
+    try {
+      const id = await runToEnd({ task: 'do the thing' });
+      expect(store.getRun(id)?.modelIdentity).toBeUndefined();
+    } finally {
+      delete process.env.CEZ_MOCK_INIT_MODEL;
+    }
+  }, 30_000);
+
   it('a provider-qualified model is normalised to the bare wire form for claude', async () => {
     // `anthropic/claude-opus-4-1` is deliberately NOT one of opencode's known
     // presets, so `continueRun`'s foreign-pin guard leaves it on the record and

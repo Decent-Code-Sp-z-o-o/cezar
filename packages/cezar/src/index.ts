@@ -32,7 +32,6 @@ import {
   unavailableProviderMessage,
   withSelectedAccounts,
 } from './server/provider-action-gate.ts';
-import { printSkillsBanner, printStarBanner } from './skills-banner.ts';
 import { SelfUpdateService } from './self-update/service.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
 import { runSelfUpdateCommand } from './self-update/cli.ts';
@@ -392,10 +391,6 @@ async function serveCommand(
   }
   if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
   console.log(`\n  cockpit → ${url}\n`);
-  // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
-  await printSkillsBanner(repoRoot);
-  // The star ask's terminal line — same block, same two off switches.
-  await printStarBanner(repoRoot);
 
   let stopping = false;
   const shutdown = () => {

@@ -24,7 +24,6 @@ import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
-import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
@@ -78,10 +77,6 @@ export type AppShellProps = {
   /** The npm registry's newer version, when the server's update check found one (#368). The
    *  chip grows a pulsing pending dot + tooltip; absent or equal to `version`, it stays plain. */
   latestVersion?: string | null
-  /** cezar's own GitHub star count for the footer's ⭐ ask. `null` — offline, rate-limited, or
-   *  promos silenced with `CEZ_NO_BANNER=1` — renders NO chip at all rather than an empty one:
-   *  a button asking to be clicked while admitting it cannot count is worse than no button. */
-  starCount?: number | null
   /** Step 3.3's grouped task quick-list. */
   taskQuickList?: ReactNode
   /** The sidebar's machine glance (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`):
@@ -102,6 +97,7 @@ export type AppShellProps = {
    *  opt-in via `CEZ_AUTOMATIONS=1`. Defaults to shown for the same reason as `forgeAvailable`;
    *  the container passes the health payload's truth. */
   automationsAvailable?: boolean
+  terminalAvailable?: boolean
   tracker?: TrackerKind
   /** Single-project capability gating: hides workspace-expansion affordances. Defaults off so
    *  standalone and older callers preserve the multi-project shell. */
@@ -110,9 +106,6 @@ export type AppShellProps = {
    *  the slot is generic and currently unused (the #391 skills promo it once held is gone,
    *  replaced by the opt-in Import panel on the Skills page). */
   banner?: ReactNode
-  /** The bottom edge of the main column, above the composer row: the telemetry consent bar
-   *  (docs/telemetry.md) lives here, so it never covers the view or interrupts a flow. */
-  footerBanner?: ReactNode
   /** Step 3.3's multi-project sidebar: one collapsible group per registered project, each
    *  carrying its own nav + task list. When present it REPLACES the flat nav and the
    *  `taskQuickList` slot (each group brings its own copies of both); absent — the registry
@@ -188,17 +181,16 @@ export const AppShell = React.memo(function AppShell({
   skillsUpdateAvailable = false,
   version = null,
   latestVersion = null,
-  starCount = null,
   taskQuickList,
   hostWidget,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
+  terminalAvailable = true,
   tracker,
   singleProject = false,
   banner,
-  footerBanner,
   projectGroups,
   brandName = 'cezar',
   brandLogoUrl = null,
@@ -261,8 +253,8 @@ export const AppShell = React.memo(function AppShell({
   }, [])
 
   const items = React.useMemo(
-    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, tracker }),
-    [forgeAvailable, inboxAvailable, automationsAvailable, tracker],
+    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, terminal: terminalAvailable, tracker }),
+    [forgeAvailable, inboxAvailable, automationsAvailable, terminalAvailable, tracker],
   )
 
   const nav = {
@@ -275,7 +267,6 @@ export const AppShell = React.memo(function AppShell({
     skillsUpdateAvailable,
     version,
     latestVersion,
-    starCount,
     taskQuickList,
     hostWidget,
     toolsMenu,
@@ -335,14 +326,12 @@ export const AppShell = React.memo(function AppShell({
 
         <AppShellMain mainRef={mainRef}>{children}</AppShellMain>
 
-        {/* Row 4: the composer dock (thread reply, Step R3) — the footer banner above it, and
-            the bottom safe-area gutter so the scroller never runs under the home indicator. */}
+        {/* Row 4: the bottom edge of the main column. Empty by content, never by layout — the
+            home-indicator safe-area gutter stays so the scroller never runs under it. */}
         <div
           data-slot="composer"
           className="row-start-4 pb-[env(safe-area-inset-bottom)]"
-        >
-          {footerBanner}
-        </div>
+        />
       </div>
     </div>
   )
@@ -395,7 +384,6 @@ type NavProps = {
   skillsUpdateAvailable: boolean
   version: string | null
   latestVersion: string | null
-  starCount: number | null
   taskQuickList?: ReactNode
   hostWidget?: ReactNode
   toolsMenu?: ReactNode
@@ -590,7 +578,6 @@ function SidebarContent({
   skillsUpdateAvailable,
   version,
   latestVersion,
-  starCount,
   taskQuickList,
   hostWidget,
   toolsMenu,
@@ -777,7 +764,6 @@ function SidebarContent({
             {toolsMenu}
           </div>
           {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} /> : null}
-          {starCount === null ? null : <StarChip count={starCount} />}
           <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
           <ThemeToggle />
         </div>
@@ -1054,40 +1040,6 @@ function VersionChip({ version, latestVersion, brandName }: { version: string; l
       </button>
       {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} brandName={brandName} /> : null}
     </>
-  )
-}
-
-/**
- * The footer's ⭐ ask: a link to cezar's repository with its current star count.
- *
- * It is a request and only a request. Nothing about cezar behaves differently for someone who
- * never clicks it, there is no reward on the other side, and it cannot be "completed" — which is
- * also why it has no dismiss control: a chip the size of the version chip, sitting quietly in the
- * chrome, has nothing to dismiss.
- *
- * `shrink-0`, unlike `VersionChip`. That chip is the controls row's ONE elastic item on purpose
- * (#876: a long nightly version string has to come out of somewhere), and a second elastic
- * control would give the row two ways to lose — this one is at most six characters wide
- * (`⭐ 12.3k`), so it can afford to be rigid and let the version string keep the give.
- *
- * `rel="noreferrer"` alongside `noopener`: a local cockpit's URL is nobody's business, and the
- * whole point of the ask is that github.com learns nothing about the person making it.
- */
-function StarChip({ count }: { count: number }) {
-  const formatted = formatStarCount(count)
-  return (
-    <a
-      data-slot="star-chip"
-      href={CEZAR_REPO_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
-      aria-label={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
-      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-    >
-      <span aria-hidden="true">⭐</span>
-      <span>{formatted}</span>
-    </a>
   )
 }
 

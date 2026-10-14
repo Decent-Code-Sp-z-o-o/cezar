@@ -102,7 +102,6 @@ import type {
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
-  StarCountPayload,
   SetTelemetryConsentInput,
   TelemetryConsentPayload,
   WorktreeEntry,
@@ -135,9 +134,11 @@ import type {
   TrackerAssociationSavedResponse,
   TrackerCandidatesResponse,
   TrackerClearedResponse,
+  TrackerCompleteResponse,
   TrackerItemResponse,
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
+  TerminalSessionResponse,
   SecretsList, SecretValueInput,
   E2eStatus, E2eSetupInput, E2eSetupResponse,
 } from '@open-mercato/cezar-api-client'
@@ -152,6 +153,7 @@ import {
   runHistoryContextSchema,
   runHistoryPageSchema,
   githubOwnersResponseSchema,
+  trackerCompleteResponseSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -368,11 +370,11 @@ type ResponseValidator<T> = {
  * Its own server cannot produce such a body (`contract-parity.test.ts` pins both response types
  * to these schemas) — this guards the boundary against a proxy, a stale server, or a stub.
  */
-async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>>(
+async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>, T extends OkJson<R> = OkJson<R>>(
   res: R,
   label: string,
-  schema: ResponseValidator<OkJson<R>>,
-): Promise<OkJson<R>> {
+  schema: ResponseValidator<T>,
+): Promise<T> {
   const status = res.status
   const parsed = await unwrap(res, label)
   const result = schema.safeParse(parsed)
@@ -445,14 +447,7 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** cezar's own GitHub star count, behind the sidebar's ⭐ ask. Workspace-level: the number is
- *  about cezar, never about the project on screen. `available: false` is the ordinary offline
- *  answer and the chip renders nothing for it. */
-export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
-  return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
-}
-
-/** The opt-in telemetry answer (`~/.cezar/config.json`), behind the consent bar and
+/** The opt-in telemetry answer (`~/.cezar/config.json`), shown and written by
  *  Settings → Privacy. */
 export async function getTelemetryConsent(opts?: ReadOptions): Promise<TelemetryConsentPayload> {
   return unwrap(await cez.api.v1.telemetry.consent.$get({}, init(opts)), '/telemetry/consent')
@@ -1031,6 +1026,20 @@ export async function getTrackerItem(id: string, opts?: ReadOptions & { associat
   )
 }
 
+/** Ticks a file-backed backlog checkbox; routes answer 409 for providers without completion,
+ *  404 for an unknown item. Validated (not merely cast) because the caller hands the returned
+ *  item straight to the cache. */
+export async function completeTrackerItem(id: string, opts?: ReadOptions & { association?: TrackerAssociation }): Promise<TrackerCompleteResponse> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].tracker[':id'].complete.$post(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: { expectedScope: opts?.association ? trackerReadScope(opts.association) : undefined } },
+      init(opts),
+    ),
+    `/tracker/${encodeURIComponent(id)}/complete`,
+    trackerCompleteResponseSchema,
+  )
+}
+
 /** Lazy PR checks glyphs for on-screen rows (#664). The list call no longer ships
  *  `statusCheckRollup`; this fills the glyph in per visible PR. Degrades to
  *  `{ available: false, reason }` server-side — a missing glyph, never an ApiError. */
@@ -1209,9 +1218,11 @@ export async function getRunFile(id: string, path: string, opts?: ReadOptions): 
   )
 }
 
-/** The same-origin URL an `<img>` can load an image file's bytes from (R5 Files tab). The
- *  server serves raw ONLY for image extensions within the size cap — everything else 409s.
- *  Scoped here rather than in send() — this URL is handed to an `<img>`, never fetched. */
+/** The same-origin URL a preview element (`<img>`, `<iframe>`, `<video>`, `<audio>`) can load a
+ *  file's bytes from (R5 Files tab). The server serves raw ONLY for the previewable types within
+ *  its raw cap (images, pdf, video, audio, html — PREVIEW_MIME in git-changes.ts); the file
+ *  entry's `preview` field is the client-visible verdict, everything else 409s. Scoped here
+ *  rather than in send() — this URL is handed to an element, never fetched. */
 export function runFileRawUrl(id: string, path: string): string {
   return apiPath(runPath(id, `/files?path=${encodeURIComponent(path)}&raw=1`))
 }
@@ -1652,10 +1663,11 @@ export async function removeTodo(id: string): Promise<RemoveTodoResponse> {
 
 /** The Inbox card's optional backend choice + extra instructions for a Run. Unlike
  *  `ContinueOptions` these start a NEW run, so an omitted `runner`/`model` means the host's
- *  `defaultRunner`, not "keep the run's". `prompt` (#413) is extra instructions appended to the
+ *  `defaultRunner`, not "keep the run's". `auto` rides verbatim — the launch resolves it (spec
+ *  2026-10-12-auto-provider-selection). `prompt` (#413) is extra instructions appended to the
  *  suggested/summary task text — e.g. a template inserted in the Inbox composer. */
 export interface StartTodoOptions {
-  runner?: Runner
+  runner?: Runner | 'auto'
   model?: string
   prompt?: string
 }
@@ -2557,4 +2569,19 @@ export async function readTrackerWatch(projectId: string, watchId: string, signa
 export async function refreshTrackerWatch(projectId: string, watchId: string, signal: AbortSignal) {
   return trackerWatchSnapshotSchema.parse(await unwrap(await cez.api.v1.p[':projectId'].tracker.watch[':watchId'].$post(
     { param: { projectId, watchId } }, { init: { signal } }), '/tracker/watch'))
+}
+
+/** The web Terminal tab (spec `.ai/specs/2026-10-10-terminal-tab.md`): mint a
+ *  single-use upgrade token for a PTY session in the project root. 409 while
+ *  `CEZ_TERMINAL=1` is not set — the view renders the enable hint instead. */
+export async function createTerminalSession(
+  body: { cols?: number; rows?: number },
+): Promise<TerminalSessionResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.session.$post({
+      param: { projectId: queryScope() },
+      json: body,
+    }),
+    '/terminal/session',
+  )
 }

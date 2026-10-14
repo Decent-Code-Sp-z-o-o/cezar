@@ -1,0 +1,488 @@
+import { randomBytes } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
+import { createRequire } from 'node:module';
+import { spawn as childSpawn } from 'node:child_process';
+import type { Duplex } from 'node:stream';
+import { WebSocketServer, type WebSocket } from 'ws';
+import { z } from 'zod';
+import type { TerminalSessionResponse } from '@open-mercato/cezar-contract';
+import type { WsUpgradeVerdict } from './ws.ts';
+
+/**
+ * The web terminal hub (spec `.ai/specs/2026-10-10-terminal-tab.md`): a PTY in
+ * the project root, bridged to one browser WebSocket per session.
+ *
+ * The HTTP half is one route — `POST /terminal/session` in server.ts — which
+ * mints a SINGLE-USE, 30-second token via `issue()`. The upgrade half is
+ * `handleUpgrade()`, wired by `startServer` as the subscription bus's upgrade
+ * delegate: exactly one `upgrade` listener may route paths (Node runs them
+ * all), so the bus hands every path that is not `WS_PATH` here, and `false`
+ * means "not mine, destroy as before".
+ *
+ * Security posture (spec §"Security model"): a terminal is a shell on the
+ * host, so the chain is deliberately redundant — `terminalEnabled()` is
+ * re-checked at issue AND upgrade time (flipping `CEZ_TERMINAL`/`CEZ_DRY_RUN`
+ * takes the surface down at both layers), the upgrade re-runs the bus's own
+ * origin verdict, the token is consumed by the first upgrade that presents it
+ * (a WebSocket has no CORS — the token is what keeps a foreign local page out,
+ * the one caller the origin guard cannot fully distinguish), at most
+ * `MAX_SESSIONS` PTYs exist per process, and every PTY dies with its socket.
+ * Nothing a terminal prints is ever persisted.
+ */
+
+/** The strict opt-in gate, read per call: only the exact value `1` enables,
+ *  and dry-run — the offline/mock contract the e2e suite boots with — forces
+ *  the surface off regardless. */
+export function terminalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CEZ_TERMINAL === '1' && env.CEZ_DRY_RUN !== '1';
+}
+
+/** Live sessions per process. A brake, like maxParallel: the terminal must not
+ *  become the cheapest way to fork-bomb the host through a cockpit left open. */
+const MAX_SESSIONS = 4;
+
+/** A minted token outlives itself by this long. Long enough for the cockpit to
+ *  turn a response around; short enough that a leaked URL is not a standing
+ *  invitation. */
+const TOKEN_TTL_MS = 30_000;
+
+/** Server-side cap on ONE inbound frame — a paste, effectively. Outbound frames
+ *  are the PTY's own output and uncapped. */
+const MAX_INPUT_CHARS = 200_000;
+const MAX_PAYLOAD_BYTES = 262_144;
+
+/** Terminal frames are tiny control messages; PTY output arrives as `data`. */
+const HEARTBEAT_MS = 30_000;
+
+/** Everything the cockpit may say. Malformed frames get an `error` frame back,
+ *  like the bus — one bad caller must not cost the session. */
+const clientFrameSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('input'), data: z.string().max(MAX_INPUT_CHARS) }),
+  z.object({
+    type: z.literal('resize'),
+    cols: z.number().int().min(2).max(500),
+    rows: z.number().int().min(2).max(300),
+  }),
+]);
+
+/** The minimal PTY seam. `node-pty`'s `IPty` satisfies it structurally; the
+ *  `script(1)` adapter below implements it over a child process. */
+export interface TerminalPty {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(): void;
+}
+
+export interface PtyEventSource {
+  onData(listener: (data: string) => void): unknown;
+  /** node-pty reports a numeric signal; the `script` adapter passes the child
+   *  process's string one through. The hub reads only `exitCode`. */
+  onExit(listener: (info: { exitCode: number; signal?: number | string }) => void): unknown;
+}
+
+export type PtyFactory = (options: {
+  cwd: string;
+  cols: number;
+  rows: number;
+  env: NodeJS.ProcessEnv;
+}) => TerminalPty & PtyEventSource;
+
+/** `$SHELL` when the server's environment names one — the user's own shell,
+ *  launched as a login shell so PATHs from profile files (nvm, homebrew…)
+ *  are already set. */
+function shellBinary(): string {
+  return process.env.SHELL ?? (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash');
+}
+
+interface NodePtyModule {
+  spawn(
+    file: string,
+    args: string[],
+    options: { name: string; cols: number; rows: number; cwd: string; env: NodeJS.ProcessEnv },
+  ): TerminalPty & PtyEventSource;
+}
+
+let nodePtyModule: NodePtyModule | null | undefined;
+
+/** `node-pty` is an optionalDependency: loading it must degrade to `null`, never
+ *  throw past the hub. `createRequire` rather than `import()` because the module
+ *  is CommonJS and this package is ESM — this dodges the interop shapes entirely. */
+function loadNodePty(): NodePtyModule | null {
+  if (nodePtyModule !== undefined) return nodePtyModule;
+  try {
+    const require = createRequire(import.meta.url);
+    nodePtyModule = require('node-pty') as NodePtyModule;
+  } catch {
+    nodePtyModule = null;
+  }
+  return nodePtyModule;
+}
+
+/** The real PTY: job control, resize, every interactive program. */
+function nodePtyFactory(): PtyFactory | null {
+  const pty = loadNodePty();
+  if (!pty) return null;
+  return ({ cwd, cols, rows, env }) =>
+    pty.spawn(shellBinary(), ['-l'], { name: 'xterm-256color', cols, rows, cwd, env });
+}
+
+/** The middle rung, Linux only: `script(1)` (util-linux) allocates a real PTY
+ *  around the shell and forwards our pipes through it, so ^C, colors and prompts
+ *  work with zero native code. BSD `script` (macOS) is NOT usable here — it runs
+ *  `tcgetattr` on its own stdin and aborts (`Operation not supported on socket`)
+ *  when stdin is a pipe, which is all we can ever give it. `-F` keeps util-linux
+ *  output unbuffered; BSD has no `-F` and needs none. Resize degrades to an
+ *  `stty` line typed into the shell — visible in history, honest about the mode. */
+function scriptFactory(): PtyFactory | null {
+  if (process.platform !== 'linux') return null;
+  const args = ['-q', '-F', '/dev/null', shellBinary(), '-l'];
+  return ({ cwd, env }) => {
+    // Own process group, so killing the session takes `script` AND the shell —
+    // a plain SIGTERM to `script` can orphan the shell inside its PTY.
+    const child = childSpawn('script', args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+    });
+    const dataListeners = new Set<(data: string) => void>();
+    const exitListeners = new Set<(info: { exitCode: number; signal?: number | string }) => void>();
+    let exited = false;
+    const emitData = (chunk: Buffer | string): void => {
+      const data = String(chunk);
+      for (const listener of dataListeners) listener(data);
+    };
+    child.stdout?.on('data', emitData);
+    child.stderr?.on('data', emitData);
+    const finish = (info: { exitCode: number; signal?: number | string }): void => {
+      if (exited) return;
+      exited = true;
+      for (const listener of exitListeners) listener(info);
+    };
+    child.on('close', (code, signal) => finish({ exitCode: code ?? -1, signal: signal ?? undefined }));
+    const pty: TerminalPty & PtyEventSource = {
+      write: (data) => child.stdin?.write(data),
+      // `stty` runs inside the shell, so this is also how the SPAWN dims land
+      // (the hub always calls resize once after connecting).
+      resize: (c, r) => child.stdin?.write(`stty rows ${r} cols ${c}\n`),
+      kill: () => {
+        try {
+          if (child.pid !== undefined) process.kill(-child.pid, 'SIGHUP');
+        } catch {
+          child.kill('SIGHUP'); // already gone, or no group — best effort either way
+        }
+      },
+      onData: (listener) => void dataListeners.add(listener),
+      onExit: (listener) => void exitListeners.add(listener),
+    };
+    return pty;
+  };
+}
+
+/** The last rung, everywhere: the shell's own interactive mode over plain pipes
+ *  — no TTY at all. Prompts, command execution and colors (TERM is forced)
+ *  work; full-screen programs (vim, top) and resize do not, and ^C never
+ *  reaches the shell as a signal, so the adapter intercepts 0x03 and delivers
+ *  it as SIGINT. This is the deliberate bottom of the degradation ladder: a
+ *  working shell beats no shell, and the hub only gets here when both real PTY
+ *  paths are unavailable. */
+function bareShellFactory(): PtyFactory | null {
+  if (process.platform === 'win32') return null;
+  return ({ cwd, env }) => {
+    const child = childSpawn(shellBinary(), ['-i'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const dataListeners = new Set<(data: string) => void>();
+    const exitListeners = new Set<(info: { exitCode: number; signal?: number | string }) => void>();
+    let exited = false;
+    const emitData = (chunk: Buffer | string): void => {
+      const data = String(chunk);
+      for (const listener of dataListeners) listener(data);
+    };
+    child.stdout?.on('data', emitData);
+    child.stderr?.on('data', emitData);
+    const finish = (info: { exitCode: number; signal?: number | string }): void => {
+      if (exited) return;
+      exited = true;
+      for (const listener of exitListeners) listener(info);
+    };
+    child.on('close', (code, signal) => finish({ exitCode: code ?? -1, signal: signal ?? undefined }));
+    const pty: TerminalPty & PtyEventSource = {
+      write: (data) => {
+        // No line discipline behind a pipe: an ETX byte is just text to the
+        // shell, and Enter's `\r` would never terminate the line (a TTY's
+        // ICRNL is what turns it into `\n`). Translate both the way the tty
+        // driver would — SIGINT for ETX, newline for CR — then forward.
+        if (data.includes('\x03')) child.kill('SIGINT');
+        child.stdin?.write(data.replace(/\r/g, '\n'));
+      },
+      // Without a TTY there is nothing to resize; the hub's spawn-dims call
+      // must be a no-op, not an `stty` line the user would watch fail.
+      resize: () => undefined,
+      kill: () => {
+        try {
+          if (child.pid !== undefined) process.kill(-child.pid, 'SIGHUP');
+        } catch {
+          child.kill('SIGHUP'); // already gone, or no group — best effort either way
+        }
+      },
+      onData: (listener) => void dataListeners.add(listener),
+      onExit: (listener) => void exitListeners.add(listener),
+    };
+    return pty;
+  };
+}
+
+/** The degradation ladder, resolved once per process: node-pty (real PTY, real
+ *  resize) → `script(1)` (Linux only — a real PTY with no native module) → the
+ *  bare interactive shell (everywhere, no TTY). The hub tries these IN ORDER at
+ *  spawn time (`connect`), so a broken primary degrades to the next rung
+ *  instead of killing the session — worked example: node-pty 1.1.0 loads fine
+ *  but every spawn throws, because its npm tarball ships the macOS
+ *  `spawn-helper` without the execute bit and nothing in the package ever
+ *  chmods it (microsoft/node-pty#850; 1.0.0 is pinned for exactly this
+ *  reason). */
+let resolvedFactories: readonly PtyFactory[] | undefined;
+
+export function resolvePtyFactories(): readonly PtyFactory[] {
+  if (resolvedFactories === undefined) {
+    const factories: PtyFactory[] = [];
+    const nodePty = nodePtyFactory();
+    if (nodePty) factories.push(nodePty);
+    const script = scriptFactory();
+    if (script) factories.push(script);
+    const bare = bareShellFactory();
+    if (bare) factories.push(bare);
+    resolvedFactories = factories;
+  }
+  return resolvedFactories;
+}
+
+interface PendingToken {
+  projectId: string;
+  root: string;
+  cols: number;
+  rows: number;
+  expiresAt: number;
+}
+
+interface SessionState {
+  pty: TerminalPty;
+  alive: boolean;
+  heartbeat: ReturnType<typeof setInterval>;
+}
+
+export interface TerminalHubOptions {
+  /** The bus's upgrade verdict, applied before any token is consumed. Omitted
+   *  (e.g. a bare `createApp` whose hub never sees upgrades) → fail closed. */
+  verifyUpgrade?: (req: IncomingMessage) => WsUpgradeVerdict;
+  /** Injectable for tests — a hub that spawns nothing real. A LIST means a
+   *  fallback chain, tried in order at spawn time (the built-in chain is
+   *  node-pty, then `script`); a single function replaces the chain entirely. */
+  ptyFactory?: PtyFactory | readonly PtyFactory[];
+  maxSessions?: number;
+  tokenTtlMs?: number;
+  heartbeatMs?: number;
+  now?: () => number;
+}
+
+export type TerminalIssueResult =
+  | { status: 200; body: TerminalSessionResponse }
+  | { status: 409; error: string };
+
+export interface TerminalHub {
+  /** Mint a single-use upgrade token for a project context. The route calls
+   *  this; `terminalEnabled()` is re-checked here so the hub cannot be driven
+   *  around the route's own gate. */
+  issue(input: { projectId: string; root: string; cols?: number; rows?: number }): TerminalIssueResult;
+  /** The bus's upgrade delegate: `true` = this path is mine (handled, including
+   *  the rejections), `false` = not a terminal path, destroy as before. */
+  handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean;
+  /** Kill every session and forget every token. Idempotent. */
+  close(): void;
+}
+
+export function createTerminalHub(options: TerminalHubOptions = {}): TerminalHub {
+  const verifyUpgrade = options.verifyUpgrade;
+  const maxSessions = options.maxSessions ?? MAX_SESSIONS;
+  const tokenTtlMs = options.tokenTtlMs ?? TOKEN_TTL_MS;
+  const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
+  const now = options.now ?? Date.now;
+  const injectedFactories = options.ptyFactory;
+  /** The spawn chain: an injected single factory replaces the built-ins; an
+   *  injected list or the built-ins are tried IN ORDER, so the next backend
+   *  catches a spawn that throws (a broken node-pty must not kill the session
+   *  while `script` can still serve one). */
+  const factoriesFor = (): readonly PtyFactory[] => {
+    if (injectedFactories === undefined) return resolvePtyFactories();
+    if (typeof injectedFactories === 'function') return [injectedFactories];
+    return injectedFactories;
+  };
+  const tokens = new Map<string, PendingToken>();
+  const sessions = new Map<WebSocket, SessionState>();
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
+  let closed = false;
+
+  const send = (ws: WebSocket, frame: unknown): void => {
+    if (ws.readyState === 1) ws.send(JSON.stringify(frame));
+  };
+
+  const refuse = (socket: Duplex, status: 403 | 409, reason: string): void => {
+    socket.write(`HTTP/1.1 ${status} ${status === 403 ? 'Forbidden' : 'Conflict'}\r\nconnection: close\r\n\r\n`);
+    socket.end();
+  };
+
+  const drop = (ws: WebSocket): void => {
+    const session = sessions.get(ws);
+    if (!session) return;
+    sessions.delete(ws);
+    clearInterval(session.heartbeat);
+    try {
+      session.pty.kill();
+    } catch {
+      // a PTY that already exited — nothing to kill
+    }
+  };
+
+  const connect = (ws: WebSocket, record: PendingToken): void => {
+    if (closed || sessions.size >= maxSessions) {
+      send(ws, { type: 'error', error: 'terminal session limit reached' });
+      ws.close();
+      return;
+    }
+    const factories = factoriesFor();
+    if (factories.length === 0) {
+      send(ws, { type: 'error', error: 'no terminal backend is available on this host' });
+      ws.close();
+      return;
+    }
+    let pty: TerminalPty & PtyEventSource | undefined;
+    for (const factory of factories) {
+      try {
+        pty = factory({ cwd: record.root, cols: record.cols, rows: record.rows, env: { ...process.env, TERM: 'xterm-256color' } });
+        break;
+      } catch {
+        // A backend that cannot spawn (broken native helper, missing `script`)
+        // hands the session to the next in the chain; the error the user sees
+        // below is honest about total failure only.
+      }
+    }
+    if (!pty) {
+      send(ws, { type: 'error', error: 'could not start a terminal session' });
+      ws.close();
+      return;
+    }
+    const session: SessionState = {
+      pty,
+      alive: true,
+      heartbeat: setInterval(() => {
+        if (!session.alive) {
+          ws.terminate(); // no pong since the last beat — the peer is gone
+          return;
+        }
+        session.alive = false;
+        ws.ping();
+      }, heartbeatMs),
+    };
+    session.heartbeat.unref?.();
+    sessions.set(ws, session);
+    pty.onData((data) => send(ws, { type: 'data', data }));
+    pty.onExit((info) => {
+      send(ws, { type: 'exit', exitCode: info.exitCode });
+      ws.close();
+    });
+    ws.on('pong', () => {
+      session.alive = true;
+    });
+    ws.on('message', (raw) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(raw));
+      } catch {
+        send(ws, { type: 'error', error: 'malformed frame: not JSON' });
+        return;
+      }
+      const frame = clientFrameSchema.safeParse(parsed);
+      if (!frame.success) {
+        send(ws, { type: 'error', error: 'malformed frame: expected {type: input, data} or {type: resize, cols, rows}' });
+        return;
+      }
+      if (frame.data.type === 'input') pty.write(frame.data.data);
+      else pty.resize(frame.data.cols, frame.data.rows);
+    });
+    ws.on('close', () => drop(ws));
+    // A socket error is followed by `close`; handled so ws never throws it.
+    ws.on('error', () => undefined);
+    // Apply the requested dims through the seam — node-pty sizes the PTY at
+    // spawn, `script` mode turns this into the stty line above.
+    pty.resize(record.cols, record.rows);
+  };
+
+  const hub: TerminalHub = {
+    issue({ projectId, root, cols, rows }) {
+      if (!terminalEnabled()) {
+        return { status: 409, error: 'the web terminal is disabled — set CEZ_TERMINAL=1 and restart cezar' };
+      }
+      if (!closed && sessions.size >= maxSessions) {
+        return { status: 409, error: `terminal session limit reached (${maxSessions} live)` };
+      }
+      if (factoriesFor().length === 0) {
+        return { status: 409, error: 'no terminal backend is available — install node-pty (or ensure script(1) exists) and restart cezar' };
+      }
+      // Expired mints leave quietly; the map stays bounded by actual traffic.
+      for (const [token, pending] of tokens) if (pending.expiresAt <= now()) tokens.delete(token);
+      const minted = randomBytes(32).toString('base64url');
+      tokens.set(minted, {
+        projectId,
+        root,
+        cols: Math.min(Math.max(cols ?? 80, 2), 500),
+        rows: Math.min(Math.max(rows ?? 24, 2), 300),
+        expiresAt: now() + tokenTtlMs,
+      });
+      return { status: 200, body: { token: minted, wsPath: `/api/v1/p/${encodeURIComponent(projectId)}/terminal/ws` } };
+    },
+
+    handleUpgrade(req, socket, head) {
+      const match = /^\/api\/v1\/p\/([^/]+)\/terminal\/ws$/.exec(new URL(req.url ?? '', 'http://localhost').pathname);
+      if (!match) return false;
+      // Same verdict as the bus (Host/Origin/Sec-Fetch discipline), applied
+      // before anything is consumed — an origin that fails it never learns
+      // whether a token was real.
+      if (closed || !terminalEnabled() || !verifyUpgrade || !verifyUpgrade(req)) {
+        refuse(socket, 403, 'terminal disabled');
+        return true;
+      }
+      const token = new URL(req.url ?? '', 'http://localhost').searchParams.get('token') ?? '';
+      const record = tokens.get(token);
+      if (!record || record.expiresAt <= now()) {
+        tokens.delete(token); // single use: an expired replay consumes the row too
+        refuse(socket, 403, 'invalid or expired terminal token');
+        return true;
+      }
+      tokens.delete(token);
+      if (sessions.size >= maxSessions) {
+        refuse(socket, 409, 'terminal session limit reached');
+        return true;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => connect(ws, record));
+      return true;
+    },
+
+    close() {
+      if (closed) return;
+      closed = true;
+      for (const [ws, session] of sessions) {
+        clearInterval(session.heartbeat);
+        try {
+          session.pty.kill();
+        } catch {
+          // nothing left to kill
+        }
+        ws.terminate();
+      }
+      sessions.clear();
+      tokens.clear();
+      wss.close();
+    },
+  };
+
+  return hub;
+}

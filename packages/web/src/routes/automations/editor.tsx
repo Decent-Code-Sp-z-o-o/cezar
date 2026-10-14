@@ -373,7 +373,7 @@ function KindSegment({ value, editing, githubAvailable, githubReason, onChange }
           ? { title: kindLocked }
           : {}),
     },
-    { value: 'tracker', label: 'When Jira / Linear changes', disabled: editing && value !== 'tracker', ...(editing && value !== 'tracker' ? { title: kindLocked } : {}) },
+    { value: 'tracker', label: 'When the project tracker changes', disabled: editing && value !== 'tracker', ...(editing && value !== 'tracker' ? { title: kindLocked } : {}) },
   ]
   return (
     <div data-slot="editor-kind" role="group" aria-label="Trigger" className="inline-flex flex-wrap gap-0.5 self-start rounded-md bg-muted p-[3px]">
