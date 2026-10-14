@@ -51,6 +51,7 @@ import {
   PROMPT_TEMPLATE_TEXT_MAX,
   setWorkspaceUiStateInputSchema,
   setWorkspaceConfigInputSchema,
+  setConfigInputSchema,
   type GroupResponse,
   type GroupVariant,
   type PickVariantResponse,
@@ -89,6 +90,13 @@ import {
   type ProviderStatusResponse,
 } from '../core/provider-auth.ts';
 import { applyProviderEnablement } from '../core/provider-availability.ts';
+import {
+  LOGIN_WATCH_OFFSETS_MS,
+  reportInconclusiveProbe,
+  trackLoginNotOpened,
+  trackLoginOpened,
+  watchLogin,
+} from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
@@ -232,9 +240,11 @@ import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
+import { applyKeepAlive } from './keep-alive.ts';
 import { createTerminalHub, terminalEnabled, type TerminalHub } from './terminal.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
+import { isGithubHost } from '../github-hosts.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -268,7 +278,10 @@ import {
   providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
+  recordedProfileFor,
   unavailableProviderMessage,
+  withSelectedAccounts,
+  type ProviderAccountScope,
 } from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
@@ -345,6 +358,8 @@ export interface ServerDeps {
   providerRuntimeAuth?: ProviderRuntimeAuthObserver;
   /** Local terminal handoff for provider-owned login. */
   openTerminal?: typeof openInTerminal;
+  /** When Connect re-checks the login it opened (`LOGIN_WATCH_OFFSETS_MS`); tests pass `[]`. */
+  loginWatchOffsetsMs?: readonly number[];
   /** Hand a local FILE (or folder) to the OS default app. Injected so the account-file open route
    *  is testable without actually launching an editor. */
   openFile?: typeof openFileInDefaultApp;
@@ -1278,7 +1293,8 @@ export function createApp(deps: ServerDeps) {
       ollama: { discover: () => discoverOllamaModels() },
     },
   });
-  const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });
+  const providerAuth = deps.providerAuth
+    ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -1316,8 +1332,16 @@ export function createApp(deps: ServerDeps) {
    */
   const providerActionError = async (
     required: readonly ProviderId[],
+    scope: ProviderAccountScope = {},
   ): Promise<string | null> => {
-    const known = await providerStatus();
+    // Judge the account the action runs on, not only the default login (telemetry ac53a6ef).
+    const judged = async (refresh: boolean): Promise<ProviderStatusResponse> => {
+      const rows = await providerStatus(refresh ? { refresh: true } : undefined);
+      return providerAuthChecksDisabled()
+        ? rows
+        : withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
+    };
+    const known = await judged(false);
     const message = unavailableProviderMessage(required, known);
     if (message === null) return null;
     // A DISABLED provider is a settings fact, not a probe result — re-probing it learns nothing and
@@ -1325,7 +1349,7 @@ export function createApp(deps: ServerDeps) {
     const disabled = required.some((provider) =>
       known.providers.find((row) => row.provider === provider)?.enabled === false);
     if (disabled) return message;
-    return unavailableProviderMessage(required, await providerStatus({ refresh: true }));
+    return unavailableProviderMessage(required, await judged(true));
   };
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
@@ -2008,6 +2032,28 @@ export function createApp(deps: ServerDeps) {
   };
 
   // ---- chained family: agent providers (workspace-level) ----
+  // One watch per account: a second Connect restarts its schedule instead of doubling it.
+  const loginWatches = new Map<string, () => void>();
+  const watchOpenedLogin = (provider: ProviderId, profile: { id: string; isDefault: boolean; path: string | null }, sid?: string) => {
+    const key = `${provider}\u0000${profile.id}`;
+    loginWatches.get(key)?.();
+    const check = async (): Promise<boolean> => {
+      if (profile.isDefault) {
+        const row = (await providerStatus({ refresh: true })).providers.find((candidate) => candidate.provider === provider);
+        // The cockpit does not poll provider status, so the card learns about the login here.
+        if (row?.status === 'connected') workspaceEvents.emit('provider-status', row);
+        return row?.status === 'connected';
+      }
+      providerAuth.forgetProfileStatus(provider, profile.id);
+      return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
+    };
+    const cancel = watchLogin(check, () => {
+      loginWatches.delete(key);
+      track('provider_connected', { label: provider }, { sid });
+    }, deps.loginWatchOffsetsMs ?? LOGIN_WATCH_OFFSETS_MS);
+    loginWatches.set(key, cancel);
+  };
+
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
       '/providers/status',
@@ -2065,6 +2111,7 @@ export function createApp(deps: ServerDeps) {
 
     .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
       const body = { data: c.req.valid('json') };
+      const sid = deviceSid(c.req.header('x-cezar-sid'));
 
       const provider = body.data.provider as ProviderId;
       // A NAMED account is refused in hosted mode before anything is resolved, exactly like every
@@ -2090,6 +2137,7 @@ export function createApp(deps: ServerDeps) {
       // safe degradation. Running the bare command would sign the user into a DIFFERENT account
       // than the one they clicked, and nothing in the terminal would say so.
       if (command === null) {
+        trackLoginNotOpened(provider, 'invalid_folder', sid);
         return c.json({ error: `This account's folder cannot be used in a terminal command: ${profile.configDir}` }, 409);
       }
       // BOTH branches must mean "is this account signed in NOW". The default branch refreshes; the
@@ -2109,15 +2157,18 @@ export function createApp(deps: ServerDeps) {
       }
 
       if (row.status === 'connected') {
+        trackLoginNotOpened(provider, 'already_connected', sid);
         return c.json({ opened: false, connected: true, command });
       }
       if (row.status === 'not-installed') {
+        trackLoginNotOpened(provider, 'not_installed', sid);
         return c.json({ error: row.hint ?? providerAuth.installHint(provider), command }, 409);
       }
-      if (row.status === 'unknown') {
-        return c.json({ error: row.hint ?? 'Authentication could not be verified. Try again.', command }, 409);
-      }
+      // `unknown` (inconclusive output, timeout, unexpected exit) falls through to the login like
+      // `disconnected`: the CLI is installed, and its own login is the one surface that can say
+      // what is wrong. Refusing here left Connect a dead end that "Try again" re-probed into.
       if (!capabilities().localHandoff) {
+        trackLoginNotOpened(provider, 'hosted', sid);
         return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
       }
       let opened = false;
@@ -2130,8 +2181,11 @@ export function createApp(deps: ServerDeps) {
         // Terminal handoff is best-effort; the exact command remains the safe fallback.
       }
       if (!opened) {
+        trackLoginNotOpened(provider, 'no_terminal', sid);
         return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
       }
+      trackLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', sid);
+      watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
     });
 
@@ -3706,7 +3760,7 @@ export function createApp(deps: ServerDeps) {
     .post('/plan', jsonZodValidator(planSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
+      const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner], { repoRoot });
       if (blocked) return c.json({ error: blocked }, 409);
       return c.json(await planChain(repoRoot, parsed.data.task));
     });
@@ -4102,12 +4156,12 @@ export function createApp(deps: ServerDeps) {
             return;
           }
           const remote = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
-          if (!remote || remote.host !== 'github.com') throw new Error('No GitHub remote is configured');
+          if (!remote || !isGithubHost(remote.host)) throw new Error('No GitHub remote is configured');
           const scheduler = new ProjectAutomationScheduler({
             projectId: project.id,
             timeZone: localTimeZone(),
             store,
-            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller() },
+            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller({ host: remote.host }) },
             launch: parsed.data.mode === 'execute'
               ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
@@ -4406,7 +4460,10 @@ export function createApp(deps: ServerDeps) {
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       const fallback: ProviderId | 'auto' = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+        repoRoot,
+        profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
       // the page loaded) is answered honestly instead of quietly running on the default — the
@@ -4554,7 +4611,7 @@ export function createApp(deps: ServerDeps) {
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
-      const { store, manager } = c.get('project');
+      const { root: repoRoot, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4565,7 +4622,10 @@ export function createApp(deps: ServerDeps) {
       // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
       // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
       if (run.status !== 'queued') {
-        const blocked = await providerActionError([providerForActiveRun(run)]);
+        const blocked = await providerActionError([providerForActiveRun(run)], {
+          repoRoot,
+          profileFor: (provider) => recordedProfileFor(run, provider),
+        });
         if (blocked) return c.json({ error: blocked }, 409);
       }
       const content: PastedContent[] = [
@@ -4695,7 +4755,12 @@ export function createApp(deps: ServerDeps) {
       // launch, so a 409 on any concrete guess would refuse a continue auto could serve.
       const blocked = parsed.data.runner === 'auto'
         ? null
-        : await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
+        : await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
+          repoRoot,
+          // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
+          profileFor: (provider) => parsed.data.agentProfile
+            ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
+        });
       if (blocked) return c.json({ error: blocked }, 409);
       // The follow-up pill names an account the user just picked, so an id that has been deleted
       // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
@@ -4739,7 +4804,11 @@ export function createApp(deps: ServerDeps) {
       const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
       const sessionId = sessionStep?.sessionId;
       if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
-      const blocked = await providerActionError([providerForExistingRun(run)]);
+      // Gate the account `handoffEnv` launches on below: the session's own, default when it recorded none.
+      const blocked = await providerActionError([providerForExistingRun(run)], {
+        repoRoot,
+        profileFor: () => sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       const cwd = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
       const command = resumeCommand(run.runner, sessionId);
@@ -4846,14 +4915,18 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
-        const blocked = await providerActionError([cliRunner]);
-        if (blocked) return c.json({ error: blocked }, 409);
         const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
+        // Gate the account the terminal opens on below: the session's for a resume, the project's otherwise.
+        const blocked = await providerActionError([cliRunner], {
+          repoRoot,
+          profileFor: () => (resume ? sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID : undefined),
+        });
+        if (blocked) return c.json({ error: blocked }, 409);
         // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
         // claude found off PATH by detection has to be named by absolute path here too —
         // otherwise the menu offers a handoff that opens on `command not found`.
@@ -5592,7 +5665,7 @@ export function createApp(deps: ServerDeps) {
         }
 
         const fallback: ProviderId | 'auto' = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), { repoRoot });
         if (blocked) return c.json({ error: blocked }, 409);
 
         const run = manager.startRun(workflow, {
@@ -5989,6 +6062,7 @@ export function createApp(deps: ServerDeps) {
       const workflow = e2eSetupWorkflow(e2eCredentialsAmong(await checkSecretNames(project)));
       const blocked = await providerActionError(
         providersRequiredByWorkflow(workflow, (await loadConfig(project.root)).defaultRunner),
+        { repoRoot: project.root },
       );
       if (blocked) return c.json({ error: blocked }, 409);
       // Not autonomous: an autonomous run skips the review gate (`settleSuccess`) a user may have
@@ -6576,7 +6650,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
     })
 
-    .put('/config', jsonZodValidator(() => setConfigSchema), async (c) => {
+    .put('/config', jsonZodValidator(() => setConfigInputSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       // The auto override is a model choice too (#906), so the fixed-model
@@ -6680,54 +6754,6 @@ export function createApp(deps: ServerDeps) {
     });
 
   // Set/clear the agents' config knobs (Settings → Agents; the Repo tab's
-  // base-branch picker). Merges into the RAW config.json so user keys
-  // (skillsRepos…) survive and schema defaults are never materialized into
-  // the file. All fields optional + additive: `null` (and `''` for the
-  // R6 keys) clears a knob back to its default.
-  const modelPresetSchema = z.string().trim().max(200).nullable().optional();
-  const autoModelSchema = z.boolean().nullable().optional();
-  const setConfigSchema = z.object({
-    baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
-    defaultRunner: z.enum(RUNNER_IDS).optional(),
-    systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
-    // Branch naming instructions (spec 2026-10-11-branch-naming-instructions); null/'' clears.
-    branchNaming: z.string().trim().max(4_000, 'must be at most 4000 characters').nullable().optional(),
-    defaultModels: z
-      .object({
-        claude: modelPresetSchema,
-        codex: modelPresetSchema,
-        opencode: modelPresetSchema,
-        cursor: modelPresetSchema,
-        pi: modelPresetSchema,
-      })
-      .optional(),
-    // Per-runner "auto is the default" override (#906). Additive, and necessarily
-    // its own key: clearing a preset cannot express an explicit auto, because the
-    // answer then falls through to the coding agent's own settings file.
-    // `false`/`null` clears the override back to no opinion.
-    defaultModelsAuto: z
-      .object({
-        claude: autoModelSchema,
-        codex: autoModelSchema,
-        opencode: autoModelSchema,
-        pi: autoModelSchema,
-      })
-      .optional(),
-    // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
-    // the schema's 1–16; memoryLimitMb null/0 clears the ceiling.
-    maxParallel: z.number().int().min(1).max(16).optional(),
-    memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
-    // Worktree retention count (Settings → Resources, #483). 0 = unlimited;
-    // null clears the key back to the schema default (10). Unlike memoryLimitMb,
-    // 0 is a meaningful value (unlimited), so it is stored, not treated as clear.
-    worktreeRetention: z.number().int().min(0).max(1000).nullable().optional(),
-    // Live title updates toggle (Settings → Agents): null clears the key back
-    // to the env-default behavior.
-    liveTitleUpdates: z.boolean().nullable().optional(),
-    // Optional review gate toggle (Settings → Agents, #489): null clears the key
-    // back to the env-default behavior (OFF).
-    reviewGate: z.boolean().nullable().optional(),
-  });
   const setAgentConfigSchema = z.object({
     content: z.string().max(2_000_000),
     version: z.string().nullable(),
@@ -6900,10 +6926,20 @@ export function createApp(deps: ServerDeps) {
     ...(run.referencedPullRequestUrl !== undefined
       ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
       : {}),
+    // #854: the PR half of the same evidence rule — a `prNumber` the auto-namer scraped off a
+    // task driving ANOTHER repository is refused by the client on the strength of these.
+    ...(run.referencedPrCandidates !== undefined
+      ? { referencedPrCandidates: run.referencedPrCandidates }
+      : {}),
     ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
     ...(run.prRefs !== undefined ? { prRefs: run.prRefs } : {}),
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
+    // #819: evidence, not a link — the candidates are what let the client prove a bare
+    // `issueNumber` is another repository's and paint no chip rather than a 404 one.
+    ...(run.referencedIssueCandidates !== undefined
+      ? { referencedIssueCandidates: run.referencedIssueCandidates }
+      : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
@@ -7201,18 +7237,19 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     port,
     hostname: deps.bindHost ?? '127.0.0.1',
   });
+  applyKeepAlive(server);
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
   // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is
-  // on github.com — a project without one still fires its scheduled automations.
-  const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string } }>();
+  // on GitHub (github.com or Enterprise) — a project without one still fires its scheduled automations.
+  const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string; host: string } }>();
   // A second instance from the one the HTTP routes use (out of scope here, built inside the app
   // function) — cheap: `createTrackerService` performs no I/O at construction, only a small
   // per-connection provider cache that duplicating costs nothing correctness-wise.
   const automationTrackers = createTrackerService();
   const registerAutomationProject = async (id: string, root: string): Promise<void> => {
     const parsed = parseRemote((await getRepoInfo(root))?.remote ?? '');
-    automationProjects.set(id, { root, ...(parsed?.host === 'github.com' ? { github: { owner: parsed.owner, repo: parsed.repo } } : {}) });
+    automationProjects.set(id, { root, ...(parsed && isGithubHost(parsed.host) ? { github: { owner: parsed.owner, repo: parsed.repo, host: parsed.host } } : {}) });
   };
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
@@ -7230,7 +7267,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
         projectId,
         store,
         timeZone: localTimeZone(),
-        ...(project.github ? { github: { ...project.github, poller: new GithubPoller() } } : {}),
+        ...(project.github ? { github: { ...project.github, poller: new GithubPoller({ host: project.github.host }) } } : {}),
         // Present unconditionally (unlike `github`, precomputed above from a sync remote parse):
         // whether the project actually has a tracker connection is resolved lazily, at poll time,
         // by `getDriver()` — a project with none simply fails that call and the scheduler backs off.

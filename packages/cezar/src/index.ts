@@ -30,6 +30,7 @@ import {
 import {
   providersRequiredByWorkflow,
   unavailableProviderMessage,
+  withSelectedAccounts,
 } from './server/provider-action-gate.ts';
 import { SelfUpdateService } from './self-update/service.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
@@ -43,6 +44,7 @@ import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryC
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
+import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
@@ -265,7 +267,7 @@ async function serveCommand(
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
-  const providerAuth = new ProviderAuthService({ cwd: repoRoot });
+  const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
     workspaceEvents.emit('provider-status', status);
@@ -513,7 +515,7 @@ async function runCommand(
     return;
   }
 
-  const providerAuth = new ProviderAuthService({ cwd: repoRoot });
+  const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const requiredProviders = providersRequiredByWorkflow(
     workflow,
     (await loadConfig(repoRoot)).defaultRunner,
@@ -525,7 +527,12 @@ async function runCommand(
     ]);
     const blocked = unavailableProviderMessage(
       requiredProviders,
-      applyProviderEnablement(discovered, workspace.disabledProviders),
+      await withSelectedAccounts(
+        applyProviderEnablement(discovered, workspace.disabledProviders),
+        requiredProviders,
+        { repoRoot },
+        providerAuth,
+      ),
     );
     if (blocked) {
       console.error(blocked);

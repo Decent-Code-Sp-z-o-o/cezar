@@ -81,6 +81,8 @@ import {
   patchRun,
   pinProjectRun,
   pinRun,
+  archiveProjectRun,
+  archiveRun,
   removeQueuedMessage,
   registerProject,
   openAgentAccountFile,
@@ -974,7 +976,7 @@ export function useProjectRepoBase(): string | undefined {
   const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
   if (registered?.repoUrl) return registered.repoUrl
   const isBootProject = projectId === null || projectId === health?.bootProject
-  return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
+  return isBootProject ? githubRepoBase(health?.repo?.remote, health?.forge?.kind === 'github') : undefined
 }
 
 /** The local "Open in…" targets (#open-in). Machine-level and stable, so it caches broadly;
@@ -1779,6 +1781,20 @@ export function usePinRun(projectId?: string, cacheScope?: string) {
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
       projectId === undefined ? pinRun(id, pinned) : pinProjectRun(projectId, id, pinned),
     // Hierarchical keys: this covers the list AND the open thread's own record.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
+      }),
+  })
+}
+
+/** Archive or restore one run from a list row — `usePinRun`'s twin, same two parameters and the
+ *  same invalidate-rather-than-patch rule (the answer moves the row between views). */
+export function useArchiveRun(projectId?: string, cacheScope?: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
+      projectId === undefined ? archiveRun(id, archived) : archiveProjectRun(projectId, id, archived),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
