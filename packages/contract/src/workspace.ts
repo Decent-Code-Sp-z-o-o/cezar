@@ -391,6 +391,32 @@ export const runnerModelsSchema = z.object({
   pi: z.string().optional(),
   copilot: z.string().optional(),
 });
+
+/** Per-runner nullable model preset for `PUT /api/v1/config` partial patches. */
+const setConfigModelPresetSchema = z.string().trim().max(200).nullable().optional();
+const setConfigAutoModelSchema = z.boolean().nullable().optional();
+
+export const setConfigDefaultModelsInputSchema = z.object({
+  claude: setConfigModelPresetSchema,
+  codex: setConfigModelPresetSchema,
+  junie: setConfigModelPresetSchema,
+  opencode: setConfigModelPresetSchema,
+  cursor: setConfigModelPresetSchema,
+  pi: setConfigModelPresetSchema,
+  copilot: setConfigModelPresetSchema,
+  ollama: setConfigModelPresetSchema,
+});
+
+export const setConfigDefaultModelsAutoInputSchema = z.object({
+  claude: setConfigAutoModelSchema,
+  codex: setConfigAutoModelSchema,
+  junie: setConfigAutoModelSchema,
+  opencode: setConfigAutoModelSchema,
+  cursor: setConfigAutoModelSchema,
+  pi: setConfigAutoModelSchema,
+  copilot: setConfigAutoModelSchema,
+  ollama: setConfigAutoModelSchema,
+});
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
 /** `GET /api/v1/config` — every Settings → Agents knob in one read. */
@@ -436,28 +462,12 @@ export const setConfigInputSchema = z.object({
   systemPrompt: z.string().trim().max(20_000).nullable().optional(),
   /** Clears on `null` or `''` like `systemPrompt`. */
   branchNaming: z.string().trim().max(4_000).nullable().optional(),
-  defaultModels: z
-    .object({
-      claude: z.string().trim().max(200).nullable().optional(),
-      codex: z.string().trim().max(200).nullable().optional(),
-      opencode: z.string().trim().max(200).nullable().optional(),
-      cursor: z.string().trim().max(200).nullable().optional(),
-      pi: z.string().trim().max(200).nullable().optional(),
-      copilot: z.string().trim().max(200).nullable().optional(),
-    })
-    .optional(),
+  defaultModels: setConfigDefaultModelsInputSchema.optional(),
   /** Per-runner "auto is the default" override (#906), additive: clearing a `defaultModels` preset
    *  cannot express an explicit auto, because the answer then falls through to the coding agent's
    *  own settings file. `true` sets auto; `false`/`null` clears the override back to no opinion.
    *  Merges per runner exactly like `defaultModels`. */
-  defaultModelsAuto: z
-    .object({
-      claude: z.boolean().nullable().optional(),
-      codex: z.boolean().nullable().optional(),
-      opencode: z.boolean().nullable().optional(),
-      pi: z.boolean().nullable().optional(),
-    })
-    .optional(),
+  defaultModelsAuto: setConfigDefaultModelsAutoInputSchema.optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
   /** null or 0 clears the ceiling back to "no limit". */
   memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),

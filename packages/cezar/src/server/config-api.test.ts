@@ -179,6 +179,20 @@ describe('the config API', () => {
     expect(rawFile().defaultModels).toBeUndefined();
   });
 
+  it('PUT defaultModels persists ollama and copilot presets', async () => {
+    await put({ defaultModels: { ollama: 'qwen3-coder:30b', copilot: 'gpt-4.1' } });
+    expect((await getBody()).defaultModels).toEqual({
+      ollama: 'qwen3-coder:30b',
+      copilot: 'gpt-4.1',
+    });
+    expect(rawFile().defaultModels).toEqual({
+      ollama: 'qwen3-coder:30b',
+      copilot: 'gpt-4.1',
+    });
+    await put({ defaultModelsAuto: { ollama: true } });
+    expect(rawFile().defaultModelsAuto).toEqual({ ollama: true });
+  });
+
   it('an explicit auto default beats the coding agent\'s own configured model (#906)', async () => {
     mkdirSync(join(homeRoot, '.claude'), { recursive: true });
     mkdirSync(join(homeRoot, '.codex'), { recursive: true });

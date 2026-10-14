@@ -50,6 +50,7 @@ import {
   PROMPT_TEMPLATE_TEXT_MAX,
   setWorkspaceUiStateInputSchema,
   setWorkspaceConfigInputSchema,
+  setConfigInputSchema,
   type GroupResponse,
   type GroupVariant,
   type PickVariantResponse,
@@ -6555,7 +6556,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
     })
 
-    .put('/config', jsonZodValidator(() => setConfigSchema), async (c) => {
+    .put('/config', jsonZodValidator(() => setConfigInputSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       // The auto override is a model choice too (#906), so the fixed-model
@@ -6659,54 +6660,6 @@ export function createApp(deps: ServerDeps) {
     });
 
   // Set/clear the agents' config knobs (Settings → Agents; the Repo tab's
-  // base-branch picker). Merges into the RAW config.json so user keys
-  // (skillsRepos…) survive and schema defaults are never materialized into
-  // the file. All fields optional + additive: `null` (and `''` for the
-  // R6 keys) clears a knob back to its default.
-  const modelPresetSchema = z.string().trim().max(200).nullable().optional();
-  const autoModelSchema = z.boolean().nullable().optional();
-  const setConfigSchema = z.object({
-    baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
-    defaultRunner: z.enum(RUNNER_IDS).optional(),
-    systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
-    // Branch naming instructions (spec 2026-10-11-branch-naming-instructions); null/'' clears.
-    branchNaming: z.string().trim().max(4_000, 'must be at most 4000 characters').nullable().optional(),
-    defaultModels: z
-      .object({
-        claude: modelPresetSchema,
-        codex: modelPresetSchema,
-        opencode: modelPresetSchema,
-        cursor: modelPresetSchema,
-        pi: modelPresetSchema,
-      })
-      .optional(),
-    // Per-runner "auto is the default" override (#906). Additive, and necessarily
-    // its own key: clearing a preset cannot express an explicit auto, because the
-    // answer then falls through to the coding agent's own settings file.
-    // `false`/`null` clears the override back to no opinion.
-    defaultModelsAuto: z
-      .object({
-        claude: autoModelSchema,
-        codex: autoModelSchema,
-        opencode: autoModelSchema,
-        pi: autoModelSchema,
-      })
-      .optional(),
-    // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
-    // the schema's 1–16; memoryLimitMb null/0 clears the ceiling.
-    maxParallel: z.number().int().min(1).max(16).optional(),
-    memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
-    // Worktree retention count (Settings → Resources, #483). 0 = unlimited;
-    // null clears the key back to the schema default (10). Unlike memoryLimitMb,
-    // 0 is a meaningful value (unlimited), so it is stored, not treated as clear.
-    worktreeRetention: z.number().int().min(0).max(1000).nullable().optional(),
-    // Live title updates toggle (Settings → Agents): null clears the key back
-    // to the env-default behavior.
-    liveTitleUpdates: z.boolean().nullable().optional(),
-    // Optional review gate toggle (Settings → Agents, #489): null clears the key
-    // back to the env-default behavior (OFF).
-    reviewGate: z.boolean().nullable().optional(),
-  });
   const setAgentConfigSchema = z.object({
     content: z.string().max(2_000_000),
     version: z.string().nullable(),
