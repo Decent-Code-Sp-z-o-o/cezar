@@ -45,6 +45,9 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   junie: 'junie --resume',
   pi: 'pi --session',
   copilot: 'copilot --resume',
+  // The server keeps no session to resume, so 'Continue' starts fresh; `ollama run` is the
+  // real hand-off — the model's own interactive chat, without this conversation's history.
+  ollama: 'ollama run',
 }
 
 /** The per-backend take-over command. Records without a runner recorded predate the runner

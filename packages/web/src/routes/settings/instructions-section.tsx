@@ -104,7 +104,7 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
           </Button>
           {promptOverLimit ? (
             <p data-slot="instructions-prompt-limit" className="text-[11px] text-danger">
-              {trimmedPrompt.length.toLocaleString()} characters — the limit is {SYSTEM_PROMPT_MAX.toLocaleString()}.
+              {trimmedPrompt.length.toLocaleString('en-US')} characters — the limit is {SYSTEM_PROMPT_MAX.toLocaleString('en-US')}.
             </p>
           ) : (
             <p className="text-[11px] text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
@@ -137,8 +137,8 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
           </Button>
           {branchNamingOverLimit ? (
             <p data-slot="instructions-branch-naming-limit" className="text-[11px] text-danger">
-              {trimmedBranchNaming.length.toLocaleString()} characters — the limit is{' '}
-              {BRANCH_NAMING_MAX.toLocaleString()}.
+              {trimmedBranchNaming.length.toLocaleString('en-US')} characters — the limit is{' '}
+              {BRANCH_NAMING_MAX.toLocaleString('en-US')}.
             </p>
           ) : (
             <p className="text-[11px] text-soft-foreground">

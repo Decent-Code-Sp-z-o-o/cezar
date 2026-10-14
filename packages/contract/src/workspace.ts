@@ -79,6 +79,7 @@ export const workspaceConfigResponseSchema = z.object({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      ollama: z.string().optional(),
     }).optional(),
   }),
 });
@@ -118,6 +119,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           cursor: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
           copilot: z.string().trim().min(1).max(200).nullable().optional(),
+          ollama: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
     })
@@ -308,6 +310,7 @@ export const workspaceUiStateSchema = z.looseObject({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      ollama: z.string().optional(),
     })
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
@@ -366,6 +369,7 @@ export const setWorkspaceUiStateInputSchema = z
         pi: z.string().min(1).max(128).optional(),
         junie: z.string().min(1).max(128).optional(),
         copilot: z.string().min(1).max(128).optional(),
+        ollama: z.string().min(1).max(128).optional(),
       })
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
@@ -406,6 +410,7 @@ export const runnerModelsSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  ollama: z.string().optional(),
 });
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
@@ -460,6 +465,7 @@ export const setConfigInputSchema = z.object({
       cursor: z.string().trim().max(200).nullable().optional(),
       pi: z.string().trim().max(200).nullable().optional(),
       copilot: z.string().trim().max(200).nullable().optional(),
+      ollama: z.string().trim().max(200).nullable().optional(),
     })
     .optional(),
   /** Per-runner "auto is the default" override (#906), additive: clearing a `defaultModels` preset
@@ -472,6 +478,7 @@ export const setConfigInputSchema = z.object({
       codex: z.boolean().nullable().optional(),
       opencode: z.boolean().nullable().optional(),
       pi: z.boolean().nullable().optional(),
+      ollama: z.boolean().nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
@@ -586,7 +593,7 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'ollama']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;

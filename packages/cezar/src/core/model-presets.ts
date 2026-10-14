@@ -52,6 +52,12 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
   copilot: [],
+  // ollama lists nothing for the OpenCode reason (#794) plus one of its own: its catalog IS the
+  // host's local model library, discovered live from the running server (`ollama-model-catalog.ts`
+  // → `GET /api/tags`), and the ids are whatever the user pulled (`qwen3-coder:30b`, `devstral`,
+  // `gpt-oss:20b`). Any hard-coded list would name models the host has not installed — and a
+  // preset id the guard recognizes but the library lacks would fail the run at launch.
+  ollama: [],
 };
 
 /**

@@ -25,6 +25,8 @@ export const PROVIDERS = [
   { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
   { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
+  // No login exists: "connected" is the local server answering.
+  { id: 'ollama', label: 'Ollama', login: 'ollama serve' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
@@ -35,6 +37,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   cursor: value,
   pi: value,
   copilot: value,
+  ollama: value,
 })
 
 const STATUS_PRESENTATION = {

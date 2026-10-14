@@ -235,7 +235,8 @@ const isRunner = (value: string): value is Runner =>
   value === 'opencode' ||
   value === 'cursor' ||
   value === 'pi' ||
-  value === 'copilot'
+  value === 'copilot' ||
+  value === 'ollama'
 
 /** A named runner REQUEST — a concrete backend, or `auto` (the launch resolves it). Both claim
  *  the task's backend choice, so both clear a template-inherited account. */
