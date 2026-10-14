@@ -51,6 +51,8 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  // `ollama list` — exit 0 IS the connected answer; the table's shape is irrelevant.
+  ollama: 'NAME             ID              SIZE      MODIFIED\nqwen3-coder:30b  6f3a1c2d9e4b    18 GB     2 days ago',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {

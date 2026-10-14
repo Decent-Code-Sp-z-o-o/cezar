@@ -127,7 +127,7 @@ ${provider === 'OLLAMA_API_KEY' ? `
      \`\`\`
    - Set \`OLLAMA_MODEL\` environment variable in your IDE or CI to choose the model (common choices: \`llama2\`, \`llama3\`, \`mistral\`, \`codellama\`, \`tinyllama\`).
    - Run \`ollama list\` to see all available models.
-
+` : ''}
 5. Replace \`tests/example.e2e.ts\` with \`tests/smoke.e2e.ts\`: open \`/\` and assert something visible that this app actually renders (a heading, the main landmark) using locators only — no \`agent.*\` step, so the smoke test passes without a model key. Leave one commented-out \`agent.act\`/\`agent.assert\` example below it.
 
 6. Prove it locally: \`${E2E} list\` must list the smoke test, and \`${E2E} run --reporter list,markdown\` must pass (a missing browser downloads once on its own). Fix the configuration until both pass.

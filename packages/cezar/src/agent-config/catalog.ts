@@ -40,6 +40,8 @@ export interface AgentHomePaths {
   copilot: string;
   /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
   junie: string;
+  /** `~/.ollama` — models/config live here; `OLLAMA_MODELS` relocates only the model library. */
+  ollama: string;
 }
 
 export interface ConfigFileDef {

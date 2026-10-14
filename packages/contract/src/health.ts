@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'ollama']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /**
@@ -26,7 +26,7 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'gh', 'git']),
+  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'ollama', 'gh', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),

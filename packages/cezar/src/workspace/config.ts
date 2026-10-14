@@ -177,6 +177,7 @@ const agentDefaultsSchema = z
         pi: z.string().trim().min(1).max(200).optional().catch(undefined),
         junie: z.string().trim().min(1).max(200).optional().catch(undefined),
         copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
+        ollama: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()

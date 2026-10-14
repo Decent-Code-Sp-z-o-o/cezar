@@ -55,7 +55,7 @@
 ## Features
 
 - 💯&nbsp;Free and open source.
-- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `junie`, `opencode` or `pi` login. No API key needed.
+- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `junie`, `opencode` or `pi` login — or a local [Ollama](https://ollama.com) server, no login at all. No API key needed.
 - 🎛️&nbsp;Pick **Auto** and cezar chooses the cheapest capable backend at launch — and fails over to another one when that provider runs out.
 - ☁️&nbsp;Easy to set up on a VPS, so your agents keep working when your laptop is closed.
 - 📱&nbsp;Fully responsive. Start and review tasks from your phone.
@@ -126,7 +126,7 @@
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
 [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai),
-[Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli) or [pi](https://github.com/badlogic/pi-mono).
+[Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli), [pi](https://github.com/badlogic/pi-mono) or a local [Ollama](https://ollama.com) server.
 `git` and `gh` are optional.
 
 ```bash

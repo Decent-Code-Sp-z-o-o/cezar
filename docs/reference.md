@@ -244,7 +244,7 @@ steps:
     prompt: "{{task}}"
     skill: project-conventions   # optional — from .ai/skills or .ai/cezar/skills
     # model: opus                # optional per-step model override
-    # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi · auto
+    # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi · ollama · auto
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
   - id: verify
     name: Verify
@@ -471,6 +471,7 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_OLLAMA_BIN=/path/to/ollama` | Override which `ollama` binary is used (provider probe and host detection). The runner itself talks HTTP to `OLLAMA_HOST` (default `http://127.0.0.1:11434`) — that variable, not the binary, decides where a non-default server lives. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -583,7 +584,7 @@ the API below.
 ## Coding agent backends
 
 cezar is not married to one vendor. Every agent step runs through a single
-`AgentRunner` seam with five built-in backends:
+`AgentRunner` seam with these built-in backends:
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
@@ -593,6 +594,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
 | **Cursor** | [`agent`](https://cursor.com/docs/cli/overview) (Cursor Agent CLI) | Headless print mode: `agent -p --force --trust --output-format stream-json`. Continue is fresh-session in v1 (print mode exits per turn). Its documented output carries no token/cost figures, so a Cursor run's header always reads zero tokens and no cost — that is the backend not reporting usage, not the run using nothing. | Ignores `allowedTools`; `--force` / `--trust` auto-approves tool use for unattended runs. |
 | **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |
+| **Ollama** _(experimental)_ | [`ollama`](https://ollama.com) | The local server's own HTTP API (`POST /api/chat`, NDJSON streaming; `OLLAMA_HOST` honoured). The model picker reads the host library live from `GET /api/tags`. | **Text only.** The chat wire has no tool channel, so a run cannot read or edit files — route it bounded text work (summaries, research, prompts with an external verifier), not implementation tasks. `allowedTools`/`mcpServers` are ignored; every permission question is moot. |
 
 > ⚠️ **Junie, OpenCode and pi support are experimental.** All three runners work
 > but are less battle-tested than the Claude Code and Codex backends, and Junie
@@ -744,7 +746,7 @@ never blocks startup):
   // the source against a moving branch head — cezar verifies it resolves to
   // exactly that commit, and reports it as `team.commit`.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
-  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi"
+  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi" · "ollama"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)

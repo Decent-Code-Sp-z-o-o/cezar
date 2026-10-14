@@ -54,6 +54,7 @@ import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
+import { discoverOllamaModels } from '../core/ollama-model-catalog.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import {
   HANDOFF_ONLY_INSTRUCTIONS,
@@ -2823,6 +2824,7 @@ export class RunManager {
         opencode: { discover: () => discoverOpencodeModels({ cwd: this.repoRoot }) },
         junie: { discover: () => discoverJunieModels({ cwd: this.repoRoot }) },
         cursor: { discover: () => discoverCursorModels() },
+        ollama: { discover: () => discoverOllamaModels() },
       },
     });
     const [status, workspace] = await Promise.all([

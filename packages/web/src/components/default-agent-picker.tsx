@@ -49,9 +49,14 @@ export function agentPickerRows(profiles: readonly AgentProfile[]): AgentPickerR
   })
 }
 
-/** True once any agent has a second login — what turns the strip into a stacked list. */
+/** True once any agent has a second login — what turns the strip into a stacked list.
+ *
+ * Deliberately NOT `rows.length > RUNNERS.length`: that only holds while every runner
+ * contributes exactly one row, and a host never has profiles for all of them — the count
+ * comparison silently flipped this to "no accounts" the day an eighth runner joined with
+ * none. A second login is precisely a row that names a non-default account. */
 export const hasAgentAccounts = (rows: readonly AgentPickerRow[]): boolean =>
-  rows.length > RUNNERS.length
+  rows.some((row) => row.account !== null)
 
 export function DefaultAgentPicker({
   rows,

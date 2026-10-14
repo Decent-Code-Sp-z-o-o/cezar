@@ -58,6 +58,9 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   pi: null,
   junie: null,
   copilot: null,
+  // Ollama cannot carry profiles at all: the local server has no login and no config dir,
+  // so there is no second account to point anywhere.
+  ollama: null,
 };
 
 /** Providers that can carry more than one account — what the UI offers "Add account" for. */
@@ -116,4 +119,6 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   junie: [],
   // Same for copilot (`PROFILE_ENV_VAR.copilot === null`).
   copilot: [],
+  // Same for ollama (`PROFILE_ENV_VAR.ollama === null`): no login, no config dir.
+  ollama: [],
 };

@@ -79,6 +79,7 @@ import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
+import { discoverOllamaModels } from '../core/ollama-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
   PROVIDER_IDS,
@@ -1274,6 +1275,7 @@ export function createApp(deps: ServerDeps) {
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
+      ollama: { discover: () => discoverOllamaModels() },
     },
   });
   const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });

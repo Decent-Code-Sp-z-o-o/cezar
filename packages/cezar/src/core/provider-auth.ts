@@ -7,7 +7,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'ollama'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -321,6 +321,21 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/**
+ * Ollama has no login: "connected" means the local server is up and answering, which is exactly
+ * what `ollama list` proves — it is an HTTP call to the daemon, and the CLI exits non-zero with
+ * "could not connect to ollama app" when no server is listening (so a binary on PATH alone is NOT
+ * a connected provider; that would offer a runner that cannot run). `--version` was rejected as
+ * the probe for precisely that reason: it succeeds without any server. Anything else non-zero is
+ * inconclusive rather than disconnected — we do not know what the CLI complained about.
+ */
+function parseOllamaStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode === 0) return 'connected';
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (/could not connect/i.test(output)) return 'disconnected';
+  return null;
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -381,6 +396,14 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
+  },
+  {
+    id: 'ollama',
+    executable: () => process.env.CEZ_OLLAMA_BIN ?? 'ollama',
+    statusArgs: ['list'],
+    loginArgs: [],
+    installHint: 'Install Ollama (https://ollama.com/download), then start it with `ollama serve`.',
+    parse: parseOllamaStatus,
   },
 ];
 

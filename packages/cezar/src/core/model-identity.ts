@@ -119,6 +119,13 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // the run (#405's invariant). Rejecting a bare id the way opencode and pi do would reject the
   // only form Copilot accepts.
   copilot: { defaultProvider: 'github' },
+  // Ollama serves the models in the host's own library (`ollama list` — `qwen3-coder:30b`,
+  // `gpt-oss:20b`) over one local endpoint, so every id is bare and `ollama` itself is the
+  // canonical provider namespace — the cursor shape, not the opencode one. An explicit
+  // `vendor/model` string is still accepted by the shared parser but fails the
+  // single-provider check in `resolveModelIdentity`, which is the right refusal: ollama
+  // routes nothing to any other vendor.
+  ollama: { defaultProvider: 'ollama' },
 };
 
 const SLASH = '/';

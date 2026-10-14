@@ -52,6 +52,13 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  // Ollama's probe is `ollama list` — a real call to the local server, so exit 0 IS the
+  // connected answer; the table's exact shape is irrelevant to the parser.
+  ollama: {
+    stdout: 'NAME             ID              SIZE      MODIFIED\nqwen3-coder:30b  6f3a1c2d9e4b    18 GB     2 days ago',
+    stderr: '',
+    exitCode: 0,
+  },
   pi: {
     stdout: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
     stderr: '',
@@ -107,6 +114,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
+  if (executable === 'ollama') return connectedResults.ollama!;
   return connectedResults.pi!;
 }
 
@@ -680,6 +688,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'ollama' },
       ],
     });
   });
@@ -704,6 +713,7 @@ describe('ProviderAuthService', () => {
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp'], timeoutMs: 10_000 },
+      { executable: 'ollama', args: ['list'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1160,6 +1170,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'ollama', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1273,6 +1284,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'ollama', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1441,5 +1453,43 @@ describe('ProviderAuthService', () => {
       expect(new ProviderAuthService({ platform: 'linux' }).loginCommand('opencode', '/oc-work'))
         .toBe("'opencode' auth login");
     });
+  });
+});
+
+describe('ollama status probe', () => {
+  it('reports connected when the local server answers `ollama list`', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable, args) => {
+        expect(executable).toBe('ollama');
+        expect(args).toEqual(['list']);
+        return connectedResults.ollama!;
+      }),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ ollama: { status: 'connected' } });
+  });
+
+  it('reports disconnected when the CLI could not reach the server', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner(() => ({
+        stdout: '',
+        stderr: 'Error: could not connect to ollama app, is it running?',
+        exitCode: 1,
+      })),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ ollama: { status: 'disconnected' } });
+  });
+
+  it('stays unknown on any other nonzero exit — no guessing', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner(() => ({ stdout: 'panic: something else', stderr: '', exitCode: 2 })),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ ollama: { status: 'unknown' } });
+  });
+
+  it('reports not-installed on a missing binary', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner(() => ({ stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' })),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ ollama: { status: 'not-installed' } });
   });
 });

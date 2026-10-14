@@ -76,6 +76,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'ollama', label: 'ollama', desc: 'Ollama (local server, text-only runs)' },
 ]
 
 export interface ModelPreset {
@@ -135,6 +136,11 @@ export const MODELS_BY_RUNNER: Record<ComposerRunner, readonly ModelPreset[]> = 
   // stays free text for anything the account is entitled to.
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
+  ],
+  // ollama discovers from the host server (`MODEL_DISCOVERY_RUNNERS`), so `auto` alone is the
+  // honest fallback — a pinned id here would name a model the host may never have pulled.
+  ollama: [
+    { id: '', label: 'auto', desc: 'Use your ollama default model' },
   ],
 }
 
@@ -235,6 +241,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   opencode: 'OpenCode',
   junie: 'Junie',
   cursor: 'Cursor',
+  ollama: 'Ollama',
 }
 
 export function modelCatalogStatus(

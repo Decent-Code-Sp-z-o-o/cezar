@@ -241,6 +241,12 @@ export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // it authenticates with (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`) are already forwarded to every
   // backend below, and `COPILOT_GITHUB_TOKEN` is covered by this prefix — so nothing else widens.
   copilot: ['COPILOT_'],
+  // Ollama's real configuration surface is its env family: `OLLAMA_HOST` (where the server
+  // listens / where a client connects), `OLLAMA_MODELS` (library location), `OLLAMA_KEEP_ALIVE`,
+  // `OLLAMA_FLASH_ATTENTION`, … None are credentials — the server is local and unauthenticated —
+  // but a run must be able to follow the host's OLLAMA_HOST, or a runner talking to a non-default
+  // endpoint would silently miss it.
+  ollama: ['OLLAMA_'],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the
