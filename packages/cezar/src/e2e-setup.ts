@@ -40,6 +40,7 @@ const PROVIDER_HINTS: Record<E2eCredentialName, string> = {
   OPENAI_API_KEY: 'OpenAI directly — add `@ai-sdk/openai` as a devDependency and use its `openai(...)` model',
   ANTHROPIC_API_KEY: 'Anthropic directly — add `@ai-sdk/anthropic` as a devDependency and use its `anthropic(...)` model',
   OPENROUTER_API_KEY: 'OpenRouter — add `@openrouter/ai-sdk-provider` as a devDependency and use its `openrouter(...)` model',
+  OLLAMA_API_KEY: 'Ollama (local) — add `@ai-sdk/ollama` as a devDependency and use its `ollama(...)` model with base URL `http://127.0.0.1:11434/v1` and a model name from your installed models (e.g. llama2, llama3, mistral, codellama)',
 };
 
 /**
@@ -111,6 +112,21 @@ export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): strin
    - \`app.command\`: start THIS project's dev server as \`{ executable, args, env }\` (never a shell string) with the \`{port}\` placeholder, bound to 127.0.0.1 — e.g. Vite \`['run','dev','--','--host','127.0.0.1','--port','{port}','--strictPort']\`, Next.js \`['run','dev','--','-H','127.0.0.1','-p','{port}']\` (and add \`allowedDevOrigins: ['127.0.0.1']\` to the Next config, or the page never hydrates). Pass \`PORT: '{port}'\` in \`env\` too. Raise \`startupTimeout\` if the dev server is slow to start. The app process inherits only PATH, HOME and temp variables, so put anything else it needs in \`env\`.
    - Model: ${providerLine}
    - Read \`node_modules/e2e/docs/reference/config.mdx\` for anything not covered here.
+
+${provider === 'OLLAMA_API_KEY' ? `
+   - Add \`@ai-sdk/ollama\` to \`devDependencies\`: \`npm install -D @ai-sdk/ollama\`
+   - Configure the Ollama provider:
+     \`\`\`typescript
+     import { ollama } from '@ai-sdk/ollama';
+     import { createOpenAI } from '@ai-sdk/openai';
+
+     const ollama = createOpenAI({
+       baseURL: 'http://127.0.0.1:11434/v1',
+       ...(process.env.OLLAMA_MODEL && { defaultHeaders: { 'X-Title': 'cezar' } }),
+     }).chat({ modelName: process.env.OLLAMA_MODEL || 'llama2' });
+     \`\`\`
+   - Set \`OLLAMA_MODEL\` environment variable in your IDE or CI to choose the model (common choices: \`llama2\`, \`llama3\`, \`mistral\`, \`codellama\`, \`tinyllama\`).
+   - Run \`ollama list\` to see all available models.
 
 5. Replace \`tests/example.e2e.ts\` with \`tests/smoke.e2e.ts\`: open \`/\` and assert something visible that this app actually renders (a heading, the main landmark) using locators only — no \`agent.*\` step, so the smoke test passes without a model key. Leave one commented-out \`agent.act\`/\`agent.assert\` example below it.
 

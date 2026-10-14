@@ -20,6 +20,7 @@ const PROVIDER_LABELS: Record<E2eCredentialName, string> = {
   OPENAI_API_KEY: 'OpenAI',
   ANTHROPIC_API_KEY: 'Anthropic',
   OPENROUTER_API_KEY: 'OpenRouter',
+  OLLAMA_API_KEY: 'Ollama (Local)',
 }
 
 const IN_FLIGHT: ReadonlySet<RunStatus> = new Set(['queued', 'running', 'waiting'])
