@@ -390,6 +390,7 @@ export const runnerModelsSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  ollama: z.string().optional(),
 });
 
 /** Per-runner nullable model preset for `PUT /api/v1/config` partial patches. */
