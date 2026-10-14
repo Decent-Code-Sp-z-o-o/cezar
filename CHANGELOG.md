@@ -4,11 +4,56 @@
 - ✨ Auto model badge names the serving model beside the ask (`auto - Qwen3.8-27B`) in the run header and engine pills.
 - ✨ The engine lands the backend's own serving-model report (`session.started.model`, claude and cursor) on the run and step, so the `auto - <model>` badge now fills in for an unpinned model too — previously only a pinned model or an auto-runner launch ever wrote the identity.
 - ✨ Auto provider selection: a task can ask for a backend instead of naming one — the composer's **Auto** card, `cez task create --runner auto`, `runner: auto` on a workflow step or in an automation definition — and cezar resolves it at launch to the cheapest capable provider and model on the host, then fails over to a similar model on a different provider when that one runs out, bounded by `resources.autoProvider` (`maxFailovers` 3, `maxWaitMinutes` 10). Records keep both the resolved runner and the `auto` request; tasks naming a concrete runner never fail over and keep waiting for their own provider's reset.
-- ✨ Branch naming instructions in Settings → Instructions: task branches are named from the first prompt under your instructions, with a short wait before the fork and a skeleton in the branch cell meanwhile; empty keeps `cez/<id>`. *(@martaradziszewska)*
-- ✨ Project settings regrouped: Agents keeps providers, runner and models; the new Instructions section holds the system prompt, branch naming and prompt templates; the new Tasks section holds base branch, the review gate and live titles. Old prompt-templates links redirect. *(@martaradziszewska)*
 
 ## 🐛 Fixes
 - 🐛 OpenCode 2.x credential rows sourced from environment variables (`openai  openai_api_key  environment`) no longer leave the provider stuck at "Could not verify" — the auth probe now recognizes the `environment` row state beside `stored`, so a CLI that self-reports a usable credential reads as connected.
+
+# 0.15.1 (2026-10-13)
+
+## Highlights
+Create a brand-new project from cezar, optionally with a private GitHub repo. Task branches can be named from the first prompt, and project settings are regrouped into Agents, Instructions and Tasks. The run header gets one next-step git button, automations fire on merged or closed pull requests, and cezar can send anonymous usage metrics and error reports after you opt in. Forks work end to end: tasks fork from, and open PRs on, the PR-target remote. The desktop app installs its own Node.js when none is found. The rest is fixes.
+
+## ✨ Features
+- ✨ Create a new project: a fresh git repo, optionally a private GitHub repo, from a template. (#1402) *(@patzick)*
+- ✨ Branch naming instructions in Settings → Instructions: task branches are named from the first prompt; empty keeps `cez/<id>`. (#1398) *(@martaradziszewska)*
+- ✨ Project settings regrouped into Agents, Instructions and Tasks; old prompt-templates links redirect. (#1398) *(@martaradziszewska)*
+- ✨ Automations can fire when a pull request is merged (`pull_request.merged`) or closed without merging (`pull_request.closed`). (#1415) *(@patzick)*
+- ✨ The run header is regrouped around one git button that shows the next step: Create PR, Commit and push, Push, Update branch, Resolve conflicts or Fix errors. (#1337) *(@martaradziszewska)*
+- ✨ An expanded tool card shows the full command the agent ran (fixes #1306). (#1310) *(@kmrosiek)*
+- ✨ Anonymous telemetry: usage metrics and error reports, sent only after you opt in; `CEZ_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off. Error popups are reported too. (#1381, #1408) *(@patzick)*
+- ✨ The desktop app installs a managed Node.js when it finds no Node 20+ (shell 0.1.5). (#1405) *(@patzick)*
+- ✨ The desktop shell reports its own failures, or offers a button to (shell 0.1.6). (#1406) *(@patzick)*
+- ✨ The sidebar ⭐ star count refreshes every 10 seconds. (#1379) *(@pat-lewczuk)*
+
+## ⚡ Performance
+- ⚡ Reopening a task is cheap: history context is cached, replay is streamed and SSE resumes from the tail seq. (#1187) *(@lbajsarowicz)*
+
+## 🐛 Fixes
+- 🐛 Tasks fork from, and open PRs on, the PR-target remote instead of a hard-coded `origin`. (#1383) *(@martaradziszewska)*
+- 🐛 `issue.labeled` and `issue.unlabeled` automations no longer fail on every poll against a real repository (fixes #914). (#916) *(@sapersky)*
+- 🐛 `CEZ:DONE` and `CEZ:ASK` survive trailing task-reference markers (fixes #997). (#1154) *(@pat-lewczuk)*
+- 🐛 Multi-line code blocks in the thread keep their line breaks. (#1384) *(@patzick)*
+- 🐛 Oversized Markdown stays inside task-thread bubbles and scrolls horizontally. (#1356) *(@martaradziszewska)*
+- 🐛 Jumping to a file in the Changes tab scrolls only the diff, not the whole cockpit. (#1380) *(@martaradziszewska)*
+- 🐛 Buttons and menu items show the pointer cursor. (#1414) *(@martaradziszewska)*
+- 🐛 The desktop app finds Node 20+ wherever an installer or version manager put it (shell 0.1.4). (#1404) *(@patzick)*
+- 🐛 macOS privacy prompts in the desktop app name the agent, not "2.1.295" or "node". (#1407) *(@patzick)*
+
+## 🧪 Testing
+- 🧪 Telemetry tests key sends by endpoint, not arrival order. (#1395) *(@patzick)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 CI runs vitest in three parallel shards. (#1416) *(@patzick)*
+- 🚀 The macOS desktop release legs get room for Apple notarization. (#1409) *(@patzick)*
+
+## 👥 Contributors
+
+- @patzick
+- @martaradziszewska
+- @pat-lewczuk
+- @lbajsarowicz
+- @kmrosiek
+- @sapersky
 
 # 0.15.0 (2026-10-11)
 
