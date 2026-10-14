@@ -34,6 +34,7 @@ import {
   formatModelIdentity,
   normalizeModelForBackend,
   parseModelIdentity,
+  resolveModelIdentity,
 } from '../core/model-identity.ts';
 import {
   NATIVE_DEFAULT_TIER,
@@ -6670,6 +6671,7 @@ export class RunManager {
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
     if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
     this.recordUsageUiEvent(runId, state, event);
+    this.recordServingModelUiEvent(runId, state, event);
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
@@ -6698,6 +6700,27 @@ export class RunManager {
       startedTurns: new Set(),
       recordedTurns: new Set(),
     };
+  }
+
+  /** Land the backend's own "this is what serves me" report (#405) on the
+   *  record. The spawn-time identity only exists for a PINNED model — an auto
+   *  ask never writes one — so without this a session the backend has already
+   *  named (claude/cursor `session.started.model`) leaves every reader of
+   *  `modelIdentity` (the composer's `auto - <model>` pill, the badge tooltip)
+   *  a bare "auto". A report is telemetry, not a request: an id the canonical
+   *  resolver can't place quietly doesn't land instead of failing the run. */
+  private recordServingModelUiEvent(runId: string, state: ActiveRun, event: UiEvent): void {
+    if (event.type !== 'session.started' || !event.model?.trim()) return;
+    let identity;
+    try {
+      identity = resolveModelIdentity(event.backend, event.model);
+    } catch {
+      return;
+    }
+    if (!identity) return;
+    const modelIdentity = formatModelIdentity(identity);
+    if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { modelIdentity });
+    this.store.updateRun(runId, { modelIdentity });
   }
 
   /** Fold backend-neutral completed-turn usage into the current step exactly

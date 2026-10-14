@@ -55,7 +55,11 @@ if (process.env.CEZ_MOCK_ARGS_FILE) {
   }
 }
 
-emit({ type: 'system', subtype: 'init' });
+// Testability hook: CEZ_MOCK_INIT_MODEL makes the init frame report a serving
+// model the way the real CLI does (its resolved id), so the engine's
+// session.started → record wiring is testable dry.
+const initModel = process.env.CEZ_MOCK_INIT_MODEL;
+emit({ type: 'system', subtype: 'init', ...(initModel ? { model: initModel } : {}) });
 
 let turn = 0;
 
