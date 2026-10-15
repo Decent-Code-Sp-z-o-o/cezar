@@ -98,7 +98,7 @@ export function mapOllamaChatChunk(
       ui.push({ type: 'item.started', item: { kind: 'message', id: next.itemId, role: 'assistant', text: '' } });
     }
     next.text += content;
-    v1.push({ type: 'text', text: content });
+    // v1 `text` is coalesced in the runner (V1TextCoalescer) — one block per turn, not per delta.
     ui.push({ type: 'item.delta', itemId: next.itemId, field: 'text', delta: content });
   }
 

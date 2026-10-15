@@ -58,10 +58,7 @@ describe('OllamaRunner', () => {
     expect(result.tokensUsed).toBe(15);
     expect(result.sessionId).toEqual(expect.any(String));
     expect(result.toolCalls).toEqual([]);
-    expect(events.filter((e) => e.type === 'text')).toEqual([
-      { type: 'text', text: 'Hel' },
-      { type: 'text', text: 'lo' },
-    ]);
+    expect(events.filter((e) => e.type === 'text')).toEqual([{ type: 'text', text: 'Hello' }]);
     expect(events).toContainEqual({ type: 'token-usage', tokensUsed: 15 });
     expect(events).toContainEqual({ type: 'turn-end' });
     expect(events.at(-1)).toEqual({ type: 'done' });
@@ -166,8 +163,13 @@ describe('OllamaRunner', () => {
       }))),
     });
     const events: AgentEvent[] = [];
-    const session = runner.startSession({ userPrompt: 'hi', cwd: '/repo' }, (e) => events.push(e));
-    await vi.waitFor(() => expect(events.some((e) => e.type === 'text')).toBe(true));
+    let sawDelta = false;
+    const session = runner.startSession(
+      { userPrompt: 'hi', cwd: '/repo' },
+      (e) => events.push(e),
+      { onUiEvent: (e) => { if (e.type === 'item.delta') sawDelta = true; } },
+    );
+    await vi.waitFor(() => expect(sawDelta).toBe(true));
     // The first chunk has landed — stop the session mid-stream.
     session.interrupt();
     released();

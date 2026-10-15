@@ -4085,7 +4085,10 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = !requestedAuto && sessionBackend === targetRunner && !accountSwitched;
+    const resume = !requestedAuto
+      && sessionBackend === targetRunner
+      && !accountSwitched
+      && RESUMABLE_BACKENDS.has(targetRunner);
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat

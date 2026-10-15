@@ -37,8 +37,8 @@ describe('mapOllamaChatChunk', () => {
     state = first.state;
     const second = mapOllamaChatChunk(state, { message: { role: 'assistant', content: 'lo' } });
 
-    expect(first.v1).toEqual([{ type: 'text', text: 'Hel' }]);
-    expect(second.v1).toEqual([{ type: 'text', text: 'lo' }]);
+    expect(first.v1).toEqual([]);
+    expect(second.v1).toEqual([]);
     expect(first.ui.some((e) => e.type === 'item.started')).toBe(true);
     expect(second.ui.filter((e) => e.type === 'item.started')).toHaveLength(0);
     expect(second.state.text).toBe('Hello');
