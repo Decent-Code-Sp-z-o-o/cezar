@@ -534,6 +534,12 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Tracks whether the agent is in a reasoning-only phase without taking action. */
+  isInReasoningPhase?: boolean;
+  /** Timestamp when the current reasoning phase started (to detect loops). */
+  reasoningStartTime?: number;
+  /** Timestamp of the last tool execution (to detect reasoning-only loops). */
+  lastToolExecutionTime?: number;
   /** Consecutive compaction-ended turns this session has been continued through (#955),
    *  bounded by `MAX_COMPACTION_CONTINUES`. Unlike `autoContinues` this is NOT a lifetime
    *  budget: any turn that ends for another reason resets it, because that turn is the proof
@@ -614,6 +620,9 @@ interface ActiveRun {
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
  *  Exported so the tests assert against the real cap instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
+/** Maximum time an autonomous agent can stay in reasoning-only mode before being forced to take action.
+ *  Exported so tests can verify the timeout works correctly. */
+export const REASONING_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
  *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
