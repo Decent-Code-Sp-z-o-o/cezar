@@ -20,6 +20,7 @@ import {
 } from './ollama-ui-mapper.ts';
 import { resolveOllamaHost } from './ollama-model-catalog.ts';
 import { DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
+import { V1TextCoalescer } from './v1-text-coalescer.ts';
 
 export { DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 
@@ -56,8 +57,9 @@ interface OllamaChatMessage {
  * will end with prose, not changes. Route ollama the work the local-model
  * research (.ai/specs/units-research/08-cheap-and-local-models.md §6) calls
  * safe at the bottom tier: bounded text work with an external verifier.
- * Sessions do not resume ("Continue" starts fresh — the server keeps no
- * history to resume into), and `spec.allowedTools`/`mcpServers` are ignored.
+ * Continue on the same backend is handled by the workflow layer (portable context
+ * in the opening prompt) — this runner always starts with an empty client
+ * history. `spec.allowedTools`/`mcpServers` are ignored.
  */
 export class OllamaRunner implements AgentRunner {
   readonly backend = 'ollama' as const;
@@ -111,6 +113,9 @@ class OllamaSession implements AgentSession {
   private readonly timeoutMs: number;
   private readonly doFetch: typeof fetch;
   private state: OllamaUiMapperState;
+  /** Per-turn key for v1 coalescing — item ids are stable for the whole session. */
+  private turnSeq = 0;
+  private readonly textCoalescer: V1TextCoalescer;
 
   private history: OllamaChatMessage[];
   private turnChain: Promise<void> = Promise.resolve();
@@ -140,6 +145,7 @@ class OllamaSession implements AgentSession {
     this.model = spec.model?.trim() || undefined;
     this.history = buildInitialHistory(spec);
     this.state = createOllamaUiState({ sessionId: spec.sessionId ?? randomUUID() });
+    this.textCoalescer = new V1TextCoalescer((text) => this.emit({ type: 'text', text }));
 
     this.result = new Promise<AgentRunResult>((resolve, reject) => {
       this.settleResult = resolve;
@@ -253,11 +259,23 @@ class OllamaSession implements AgentSession {
     this.emitChunk(buffer);
   }
 
+  private coalescerKey(): string {
+    return `ollama-turn-${this.turnSeq}`;
+  }
+
   private emitChunk(line: string): void {
     const chunk = parseOllamaChatLine(line);
     if (!chunk) return;
+    const textBefore = this.state.text;
     const mapped = mapOllamaChatChunk(this.state, chunk);
     this.state = mapped.state;
+    const content = typeof chunk.message?.content === 'string' ? chunk.message.content : '';
+    if (content) this.textCoalescer.append(this.coalescerKey(), content);
+    if (chunk.done === true) {
+      const turnText = this.state.text.slice(textBefore.length);
+      this.textCoalescer.complete(this.coalescerKey(), turnText || undefined);
+      this.turnSeq += 1;
+    }
     for (const event of mapped.v1) this.emit(event);
     for (const event of mapped.ui) this.emitUi([event]);
   }
@@ -284,6 +302,7 @@ class OllamaSession implements AgentSession {
   private settle(): void {
     if (this.settled) return;
     this.settled = true;
+    this.textCoalescer.flush();
     this.emitUi([ollamaSessionEndedEvent('cancelled')]);
     this.emit({ type: 'done' });
     this.settleResult({
