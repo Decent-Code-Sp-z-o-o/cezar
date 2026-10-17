@@ -534,6 +534,12 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Tracks whether the agent is in a reasoning-only phase without taking action. */
+  isInReasoningPhase?: boolean;
+  /** Timestamp when the current reasoning phase started (to detect loops). */
+  reasoningStartTime?: number;
+  /** Timestamp of the last tool execution (to detect reasoning-only loops). */
+  lastToolExecutionTime?: number;
   /** Consecutive compaction-ended turns this session has been continued through (#955),
    *  bounded by `MAX_COMPACTION_CONTINUES`. Unlike `autoContinues` this is NOT a lifetime
    *  budget: any turn that ends for another reason resets it, because that turn is the proof
@@ -614,6 +620,9 @@ interface ActiveRun {
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
  *  Exported so the tests assert against the real cap instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
+/** Maximum time an autonomous agent can stay in reasoning-only mode before being forced to take action.
+ *  Exported so tests can verify the timeout works correctly. */
+export const REASONING_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
  *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
@@ -6852,6 +6861,23 @@ export class RunManager {
     }
     this.recordServingModelUiEvent(runId, state, event);
     sink.handle(event);
+    // Track reasoning-only phases for autonomous timeout detection
+    if (event.type === 'item.started' && 'item' in event && event.item.kind === 'reasoning') {
+      state.isInReasoningPhase = true;
+      state.reasoningStartTime = Date.now();
+    }
+    if (event.type === 'item.completed' && 'item' in event) {
+      if (event.item.kind === 'reasoning') {
+        // Reasoning completed - reset phase tracking
+        state.isInReasoningPhase = false;
+        state.reasoningStartTime = undefined;
+      } else if (event.item.kind === 'tool') {
+        // Tool action completed - update last tool execution time
+        state.lastToolExecutionTime = Date.now();
+        state.isInReasoningPhase = false;
+        state.reasoningStartTime = undefined;
+      }
+    }
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
     this.leaveMonitoring(runId);
@@ -7483,6 +7509,33 @@ export class RunManager {
         message: `autonomous — the same question was asked again after a nudge, so the run parks on it instead of continuing: ${askKey}`,
       });
       return false;
+    }
+    // Check for reasoning-only loop timeout: if the agent has been reasoning for >5 minutes
+    // without taking any tool action, force it to take an action to break the loop
+    if (
+      state.isInReasoningPhase &&
+      state.reasoningStartTime &&
+      Date.now() - state.reasoningStartTime > REASONING_TIMEOUT_MS
+    ) {
+      const elapsedMinutes = Math.round((Date.now() - state.reasoningStartTime) / 60_000);
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — reasoning timeout (${elapsedMinutes} min). Forcing action to break the loop.`,
+      });
+      // Send a command to force the agent to take an action
+      if (state.session?.sendMessage([{ type: 'text', text: 'Please take an action now. Execute a tool call or make a concrete decision. Do not continue reasoning without taking action.' }])) {
+        state.isInReasoningPhase = false;
+        state.reasoningStartTime = undefined;
+      }
+      // Count this as an autoContinue for the timeout breaker
+      state.autoContinues = (state.autoContinues ?? 0) + 1;
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — continuing after timeout (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
+      });
+      return true;
     }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
     state.autoContinues = (state.autoContinues ?? 0) + 1;
