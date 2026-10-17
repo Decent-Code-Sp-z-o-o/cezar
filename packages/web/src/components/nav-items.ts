@@ -38,7 +38,7 @@ export type NavItem = {
    *  disabled there). See `visibleNavItems`. */
   automations?: boolean
   /** Terminal-gated (spec `.ai/specs/2026-10-10-terminal-tab.md`): the item exists only while
-   *  `/api/health` reports `capabilities.terminal` — opt-in via `CEZ_TERMINAL=1`, off by default.
+   *  `/api/health` reports `capabilities.webTerminal` — opt-in via `CEZ_TERMINAL=1`, off by default.
    *  See `visibleNavItems`. */
   terminal?: boolean
   tracker?: boolean
@@ -71,7 +71,7 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — automations, default-on (spec 2026-09-14), `CEZ_AUTOMATIONS=0` off. */
   automations?: boolean
-  /** `capabilities.terminal` — the web terminal, opt-in (spec 2026-10-10-terminal-tab). */
+  /** `capabilities.webTerminal` — the web terminal, opt-in (spec 2026-10-10-terminal-tab). */
   terminal?: boolean
   /** Saved local association; its kind supplies the provider label. */
   tracker?: TrackerKind

@@ -54,6 +54,7 @@
     "zod": "^4.4.3"
   },
   "optionalDependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.15",
     "@napi-rs/keyring": "^2.1.1",
     "node-pty": "1.0.0"
   },

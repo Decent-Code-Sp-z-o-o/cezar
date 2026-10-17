@@ -66,7 +66,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // it the nav must not offer a tab whose every request would 409.
   const automationsAvailable = health.data?.capabilities.automations === true
   // The web terminal is opt-in (spec 2026-10-10-terminal-tab, `CEZ_TERMINAL=1`) — same rule.
-  const terminalAvailable = health.data?.capabilities.terminal === true
+  // Distinct from `capabilities.terminal`, the task workspace's terminal, which is on for a
+  // local cockpit by default; the host-level shell keeps its stricter gate.
+  const terminalAvailable = health.data?.capabilities.webTerminal === true
   const todos = useTodos(inboxAvailable)
   // One query in the shell feeds every rendering of the active project's navigation (desktop,
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.

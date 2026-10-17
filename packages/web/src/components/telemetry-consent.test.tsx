@@ -33,7 +33,7 @@ const HEALTH: HealthResponse = {
   defaultRunner: 'claude',
   forge: null,
   capabilities: { localHandoff: true,
-  terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  terminal: false, webTerminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 }
 
 const fetchMock = vi.fn<typeof fetch>()

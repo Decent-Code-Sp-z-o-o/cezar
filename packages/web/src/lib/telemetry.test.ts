@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { telemetryEventInputSchema, telemetryRouteSchema } from '@open-mercato/cezar-api-client'
+import { attachmentCountBucket, telemetryEventInputSchema, telemetryRouteSchema } from '@open-mercato/cezar-api-client'
 
 import {
   apiRouteShape,
@@ -33,6 +33,8 @@ describe('isCanonicalRoute', () => {
     expect(isCanonicalRoute('/settings/global/appearance')).toBe(true)
     expect(isCanonicalRoute('/')).toBe(false)
     expect(isCanonicalRoute('/settings/agents')).toBe(false)
+    // A redirect to the first global section, not a page — counting it double-counts every visit.
+    expect(isCanonicalRoute('/settings/global')).toBe(false)
     expect(isCanonicalRoute('/inbox')).toBe(false)
   })
 })
@@ -75,6 +77,12 @@ describe('telemetry event relay contract', () => {
     expect(telemetryEventInputSchema.safeParse({ event: 'anything_else', label: 'new_task' }).success).toBe(false)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'multi_line' }).success).toBe(true)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'new_task' }).success).toBe(false)
+  })
+})
+
+describe('attachment count buckets (telemetry 7054e5f2)', () => {
+  it('buckets every count into the closed label set', () => {
+    expect([1, 2, 4, 5, 10, 11, 20, 25].map(attachmentCountBucket)).toEqual(['1', '2-4', '2-4', '5-10', '5-10', '11-20', '11-20', '11-20'])
   })
 })
 

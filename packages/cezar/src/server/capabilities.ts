@@ -49,7 +49,7 @@
  */
 
 import { followupsEnabled } from '../handoff.ts';
-import { terminalEnabled } from './terminal.ts';
+import { terminalEnabled as webTerminalEnabled } from './terminal.ts';
 import type { Capabilities } from '@open-mercato/cezar-contract';
 
 /** Every IPv4 address in 127.0.0.0/8, anchored. Anchoring is load-bearing: a
@@ -139,6 +139,15 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
   return isLoopbackName(normalizeHostname(host));
 }
 
+/**
+ * Whether the Preview tab may offer Design Mode (spec `2026-10-09-design-mode`). Only on a local
+ * cockpit: the picker proxy listens on loopback, which a hosted cockpit's viewer cannot reach.
+ * `CEZ_DESIGN_MODE=0` is the off switch; there is deliberately no `=1` for hosted mode.
+ */
+function designModeEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_DESIGN_MODE !== '0' && env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
  *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
  *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).
@@ -157,12 +166,22 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *  `dispatch` is boot-time for a third reason: the dispatch prompt is composed into a run's system
  *  prompt when the run STARTS, so flipping the flag mid-flight would open (or close) the routes
  *  while every run already in the tree kept its prompt. Set it and restart. */
+/** `CEZ_TERMINAL` tri-state: unset follows `localHandoff` (an interactive shell is the most
+ *  exposure a hosted cockpit can add), `=1` opts a hosted cockpit in, `=0` turns it off everywhere. */
+function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  if (env.CEZ_TERMINAL === '1') return true;
+  if (env.CEZ_TERMINAL === '0') return false;
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
     localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
+    terminal: terminalEnabled(env, bindHost),
+    designMode: designModeEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
@@ -174,7 +193,9 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     // route enforces the same predicate (defense in depth) and the hub behind it
     // reads it too, so flipping the env mid-process takes the surface down at all
     // three layers on the next request; only already-open sockets would linger.
-    terminal: terminalEnabled(env),
+    // Same env var as `terminal` above, stricter gate: the host-level shell is
+    // opt-in even where the task workspace's terminal rides on by default.
+    webTerminal: webTerminalEnabled(env),
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

@@ -112,7 +112,7 @@ const healthWith = (terminal: boolean) => ({
       singleProject: false,
       automations: false,
       dispatch: false,
-      terminal,
+      webTerminal: terminal,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,

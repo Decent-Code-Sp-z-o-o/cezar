@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { runnerRequestSchema, runnerSchema } from './health.ts';
+import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
@@ -330,6 +331,7 @@ export const runRecordSchema = z.object({
   worktree: z.literal(false).optional(),
   /** Absent for in-place runs and after an isolated worktree is removed. */
   worktreePath: z.string().optional(),
+  worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   branch: z.string().optional(),
   /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
@@ -423,6 +425,7 @@ export type ApiRun = z.infer<typeof apiRunSchema>;
  * different labels in one palette.
  */
 export const runIndexEntrySchema = z.object({
+  worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   /** The registered project this run belongs to. Joins against `GET /projects`. */
   projectId: z.string(),
   id: z.string(),
@@ -465,9 +468,12 @@ export const runIndexEntrySchema = z.object({
    *  global page's origin filter reads it, and a dispatched child inherits its root's answer
    *  there through `dispatch.rootRunId` rather than through a copy here. */
   automationId: z.string().optional(),
-  /** When the agent actually started, as opposed to when the task was created. The global page's
-   *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
+  /** When the agent actually started, as opposed to when the task was created. Feeds
+   *  `lastActivityAt` when no step is newer. */
   startedAt: z.string().optional(),
+  /** When the run last moved — its newest step start/finish, else its own times. The index is
+   *  sorted on it; the slim row carries no steps, so the cockpit cannot derive it itself. */
+  lastActivityAt: z.string(),
   /**
    * The eight fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
    * or issue chip. Carried verbatim rather than pre-resolved into a `{kind, number, url}` on the
@@ -684,6 +690,8 @@ export const gitStatusResponseSchema = z.object({
   /** Commits on the task's base branch (as last fetched) the branch does not have; null when the
    *  base cannot be resolved (none recorded, a raw sha, or a ref the repo lacks). */
   behind: z.number().nullable(),
+  /** Commits the branch has that same base lacks — what a PR would propose; null alike. */
+  ahead: z.number().nullable(),
 });
 export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
 
@@ -955,7 +963,8 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
 }
 
 /**
- * One inline attachment, base64 — ≤4 per request, ~5 MB each once decoded.
+ * One inline attachment, base64 — ~5 MB each once decoded; a request carries an
+ * `attachmentListSchema` of them.
  *
  * An image rides along as a block the model can view; a file (#950) is written to the run's
  * attachment folder and reaches the agent as a PATH only, which is the form its file tools want,
@@ -977,6 +986,63 @@ export const attachmentInputSchema = z.object({
 });
 export type AttachmentInput = z.input<typeof attachmentInputSchema>;
 
+/** A STAGED attachment (`POST /workspace/uploads`): the bytes crossed the wire when the user
+ *  attached the file, so a message names them instead of carrying them again. `name` overrides the
+ *  name it was staged under. */
+export const UPLOAD_ID_RE = /^[a-f0-9]{24}$/;
+export const attachmentRefSchema = z
+  .object({
+    uploadId: z.string().regex(UPLOAD_ID_RE, 'invalid upload id'),
+    name: z.string().max(255).optional(),
+  })
+  .strict();
+export type AttachmentRef = z.input<typeof attachmentRefSchema>;
+
+/** One entry of a message's `images` list: the bytes inline, or a reference to a staged upload. */
+export const attachmentEntrySchema = z.union([attachmentInputSchema, attachmentRefSchema]);
+export type AttachmentEntry = z.input<typeof attachmentEntrySchema>;
+
+/** The refusal for a reference whose upload is gone (pruned, or staged on another machine). The
+ *  composer matches it to re-stage and resend once, so keep the wording stable. */
+export const ATTACHMENT_UPLOAD_MISSING = 'attachment upload expired — attach the file again';
+
+/** The refusal for a message whose IMAGES, staged or inline, exceed `MAX_ATTACHMENTS_TOTAL_BASE64`:
+ *  images reach the provider inline in one turn, so staging lifts the body limit but not this one.
+ *  Files reach the agent as paths and never count. */
+export const ATTACHMENT_IMAGES_TOO_LARGE = 'attachments too large — 20 MB of images in total per message';
+
+/** Attachments per message. Staged uploads keep the bytes out of the request, so the count is a
+ *  sanity bound rather than a size proxy (telemetry 7054e5f2: a fifth screenshot was refused). */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
+
+/** Base64 characters across one message's INLINE attachments — the old 4 × ~7 MB ceiling, so a
+ *  body still fits the server's 32 MiB global limit. References do not count. */
+export const MAX_ATTACHMENTS_TOTAL_BASE64 = 28_000_000;
+
+/** One message's attachments: bounded by count, and the inline ones by total size. */
+export const attachmentListSchema = z
+  .array(attachmentEntrySchema)
+  .max(MAX_ATTACHMENTS_PER_MESSAGE)
+  .refine(
+    (list) => list.reduce((n, a) => n + ('data' in a ? a.data.length : 0), 0) <= MAX_ATTACHMENTS_TOTAL_BASE64,
+    { message: 'attachments too large — 20 MB in total per message' },
+  );
+
+/** `POST /workspace/uploads` — stage one attachment; the answer is what a message references. */
+export const stagedUploadSchema = z.object({
+  uploadId: z.string(),
+  mediaType: z.string(),
+  bytes: z.number(),
+});
+export type StagedUpload = z.infer<typeof stagedUploadSchema>;
+
+export const uploadIdParamSchema = z.object({
+  uploadId: z.string().regex(UPLOAD_ID_RE, 'invalid upload id'),
+});
+
+export const deleteUploadResponseSchema = z.object({ deleted: z.literal(true) });
+export type DeleteUploadResponse = z.infer<typeof deleteUploadResponseSchema>;
+
 /** @deprecated Attachments are no longer images only — use `attachmentInputSchema`. Kept because
  *  the `images` key it validates is the wire contract and did not change name. */
 export const imageInputSchema = attachmentInputSchema;
@@ -996,7 +1062,8 @@ export const createRunInputBaseSchema = z
     /** An inline chain (spec 008 — an approved plan runs as an ad-hoc workflow, never written to
      *  a file). The catalog's own step shape, not a copy of it. */
     steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
-    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
+    /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
+    task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     /** The concrete backend, or `auto` — resolved at launch, never persisted as a runner. */
     runner: runnerRequestSchema.optional(),
@@ -1024,7 +1091,7 @@ export const createRunInputBaseSchema = z
     /** Attachments pasted into the new-task form — screenshots, and since #950 PDF/TXT/MD files
      *  too; delivered with the first agent step. The key keeps its name: the wire contract widened
      *  in place rather than growing a second list. */
-    images: z.array(attachmentInputSchema).max(4).optional(),
+    images: attachmentListSchema.optional(),
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
@@ -1034,16 +1101,26 @@ export const createRunInputBaseSchema = z
     dispatch: dispatchIntentSchema.optional(),
   });
 
+/** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
+export function hasTaskOrAttachments(b: { task: string; images?: readonly unknown[] }): boolean {
+  return b.task.trim() !== '' || (b.images?.length ?? 0) > 0;
+}
+export const TASK_OR_ATTACHMENTS_ISSUE = {
+  message: 'describe the task or attach a file',
+  path: ['task'],
+};
+
 /**
  * `POST /runs`. Exactly one of `workflow` / `steps` — the server rejects both or neither.
  *
  * Every bound here is the server's own (#429): an unbounded body must never reach a spawned
  * process, so a client that validates before sending gets the same answer the route would give.
  */
-export const createRunInputSchema = createRunInputBaseSchema.refine(
-  (b) => Boolean(b.workflow) !== Boolean(b.steps),
-  { message: 'provide either "workflow" or "steps", not both' },
-);
+export const createRunInputSchema = createRunInputBaseSchema
+  .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
+    message: 'provide either "workflow" or "steps", not both',
+  })
+  .refine(hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE);
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**
@@ -1054,7 +1131,7 @@ export type CreateRunInput = z.input<typeof createRunInputSchema>;
 export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
-    images: z.array(attachmentInputSchema).max(4).default([]),
+    images: attachmentListSchema.default([]),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',

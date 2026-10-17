@@ -18,9 +18,10 @@ import { cn } from '@/lib/utils'
  * while the view is mounted — navigating away kills the shell, by design.
  *
  * Gating follows the nav's honesty rule: while `/api/health` has not answered
- * the body renders nothing; `capabilities.terminal === false` (the default —
+ * the body renders nothing; `capabilities.webTerminal === false` (the default —
  * the feature is opt-in via `CEZ_TERMINAL=1`) renders the enable hint instead
- * of a dead terminal.
+ * of a dead terminal. Distinct from `capabilities.terminal`, the task
+ * workspace's terminal, which shares the env var but rides on by default.
  */
 
 type Phase = 'connecting' | 'open' | 'exited' | 'disconnected' | 'error'
@@ -34,7 +35,7 @@ type ServerFrame =
 
 export function TerminalRoute() {
   const health = useHealth()
-  const enabled = health.data?.capabilities?.terminal === true
+  const enabled = health.data?.capabilities?.webTerminal === true
 
   return (
     <div data-route="terminal" className="flex h-full min-h-full flex-col">

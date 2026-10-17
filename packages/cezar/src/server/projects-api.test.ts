@@ -53,6 +53,7 @@ interface HealthBody {
   forge: unknown;
   capabilities: {
     localHandoff: boolean;
+    terminal: boolean;
     followups: boolean;
     singleProject: boolean;
     automations: boolean;
@@ -923,11 +924,13 @@ describe('workspace projects API', () => {
       expect(body.forge).toBeNull();
       expect(body.capabilities).toEqual({
         localHandoff: true,
+        terminal: true,
+        designMode: true,
         followups: false,
         singleProject: false,
         automations: true,
         dispatch: true,
-        terminal: false,
+        webTerminal: false,
         tokenMetrics: true,
         tokenUsageMetrics: true,
         costMetrics: true,

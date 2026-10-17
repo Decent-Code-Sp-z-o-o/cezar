@@ -31,10 +31,13 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 `folder`), `project_added` (`local`, `github`, `cli`, or for a new project `new_local`,
 `new_github`, `new_template`), `project_create_failed` (the step that failed, e.g.
 `folder_exists`, `github_create` — never the error text), `diff_comment_added`,
-`task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` / `task_deleted` (with the
-task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
+`task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` (which button: `sidebar`,
+`tasks_table`, `all_tasks`, `task_view`; `bulk` for Archive finished, `api` for a non-cockpit
+caller), `task_deleted` (with the task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
 (what an agent's **Connect** did — the agent and an outcome such as `unknown`, `no_terminal` or
 `already_connected` — and whether the login it opened finished within 15 minutes),
+`provider_update_opened` (what an agent's **Update** — offered next to an "X or newer is required"
+error — did: the agent and `opened`, `unsupported`, `hosted` or `no_terminal`),
 `skills_provisioned` (whether a task's selected skill and its companions were `installed` into
 its workspace, were `already_present`, or the selected skill was `root_not_found`; the count
 installed — never a skill name), `skill_missing_in_session` (the agent's backend, once per task,
@@ -42,7 +45,13 @@ when its Skill tool still answered "Unknown skill"), `session_resume_fallback` (
 session that replaced a pruned conversation ended without a session error — `recovered` —, or
 `fresh_failed`, or was `cancelled`), `task_failed` (the agent's backend and a kind —
 `missing_session`, `usage_limit`, `auth`, `timeout` or `other` — never the error text; once per
-transition into failed, not for runs a restart interrupted nor for an auto-resume failing again). Every label
+transition into failed, not for runs a restart interrupted nor for an auto-resume failing again),
+`skills_update_apply_dropped` (a skills update whose request lost its connection, and whether
+following the server then found it `recovered`, `not_applied`, `unreachable` or `timed_out`),
+`attachments_sent` (how many attachments a sent message carried, as a bucket —
+`1`, `2-4`, `5-10`, `11-20` — never their names, types or contents), `attachments_restaged`
+(whether the automatic re-upload after an expired staged attachment was `recovered` or
+`failed`). Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working
@@ -55,6 +64,11 @@ emails, URLs, slash-bearing names (paths, branches, `owner/repo`), your project 
 anything after a `: ` become placeholders. For a provider or agent-account call the report also
 names the agent (`claude`, `codex`, …). When the call got no answer at all, the report names the
 browser's own transport error (e.g. `TypeError: Load failed`), masked the same way.
+
+Every error an agent shows in a task's thread is reported the same way, as an `AgentError` named
+by the agent (`opencode: OpenCode 1.18.0 or newer is required to use the free tier`), with whether
+it ended the session and whether it asks for a newer CLI. The text is masked first: quoted values,
+emails, URLs and slash-bearing names (paths, branches, `owner/repo`) become placeholders.
 
 When cezar cannot read whether an agent's CLI is signed in, it reports why (timed out, could not
 start, unexpected exit, unrecognised output) with the shape of the answer only: exit code, Node's
