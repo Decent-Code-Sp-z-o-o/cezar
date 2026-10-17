@@ -199,6 +199,10 @@ import {
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
  *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet. */
 const RESUMABLE_BACKENDS: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'codex', 'pi']);
+/** Chat-only backends (`ollama-runner.ts` is explicit about this): the HTTP conversation has no
+ *  tool loop and no process that exits, so a completed turn is the WHOLE answer. The engine
+ *  settles the run on it instead of parking `waiting` for a reply the session can never act on. */
+const CHAT_TURN_ENDS_RUN: ReadonlySet<RunnerId> = new Set<RunnerId>(['ollama']);
 /**
  * The reply to a one-question ask card without the card's own framing: a click on an option
  * sends `<header>: <label>` (`web/src/routes/task-thread/ask-card.tsx` `formatAnswer`), a typed
@@ -4555,30 +4559,42 @@ export class RunManager {
         // working again, so the anti-spin budget is restored. Before the early returns below,
         // because a turn that finished or dispatched is progress too.
         if (!compacted) state.compactionContinues = 0;
-        const done = sessionOpen && endsWithDoneMarker(turnText);
+        const markerDone = sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
         // turn-end handlers call. Inert for a run with no `dispatch`.
         const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
           state,
           stepId,
-          done: Boolean(done),
+          done: Boolean(markerDone),
         });
         // `CEZ:ASK` → the user is genuinely blocked; wins over `CEZ:MONITORING`
         // (a pending question is always attention), loses to `CEZ:DONE` (#473)
         // and to a turn that dispatched, which parks as a monitor.
         const { ask, notes: askNotes } = resolveAskTurn(
           turnText,
-          Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
+          Boolean(sessionOpen) && !markerDone && !dispatchTurn.dispatched,
         );
         // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
         // children, not on the user, and it has to surrender its slot to them. An over-budget run
         // parks `waiting` instead, whatever it asked for (Q6 ii).
         const monitoring =
           sessionOpen &&
-          !done &&
+          !markerDone &&
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        // A chat backend's turn end IS its final answer (see CHAT_TURN_ENDS_RUN): without this
+        // every ollama turn parked `waiting` and the idle close failed the run mid-answer
+        // (live run d294d5ee — gemma never learns the CEZ:DONE contract). A structured ASK, a
+        // dispatch or a monitor still wins: those park on their own terms below.
+        const done =
+          markerDone ||
+          (CHAT_TURN_ENDS_RUN.has(backend) &&
+            sessionOpen &&
+            !ask &&
+            !monitoring &&
+            !dispatchTurn.dispatched &&
+            !dispatchTurn.overBudget);
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         // The twin of `runAgentStep`'s rule (#1282): a turn retires the question park an earlier
@@ -6571,7 +6587,7 @@ export class RunManager {
         const compacted = event.reason === 'context-compaction';
         const markerless = compacted && markerlessTurn(turnText);
         if (!compacted) state.compactionContinues = 0;
-        const done = interactive && sessionOpen && endsWithDoneMarker(turnText);
+        const markerDone = interactive && sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
         // are the agent telling cezar what it did, and a chained workflow's non-final step that
@@ -6582,7 +6598,7 @@ export class RunManager {
         const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
           state,
           stepId: step.id,
-          done: Boolean(done),
+          done: Boolean(markerDone),
         });
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473) and to a turn that dispatched.
@@ -6597,7 +6613,7 @@ export class RunManager {
         // the user.
         const { ask, notes: askNotes } = resolveAskTurn(
           turnText,
-          Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
+          Boolean(sessionOpen) && !markerDone && !dispatchTurn.dispatched,
         );
         // Does this turn park the WORKFLOW — hold a non-final step open instead
         // of letting `execute` mark it done and run the next check (#917, #1076)?
@@ -6614,11 +6630,22 @@ export class RunManager {
         // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
         const monitoring =
           sessionOpen &&
-          !done &&
+          !markerDone &&
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         const parksWorkflow = !interactive && (ask !== null || monitoring);
+        // A chat backend's turn end IS its final answer (see the twin in `runContinuation` and
+        // CHAT_TURN_ENDS_RUN): without this an interactive quick-task on ollama parked `waiting`
+        // after its only possible move and the idle close failed the run 15 minutes later.
+        const done =
+          markerDone ||
+          (CHAT_TURN_ENDS_RUN.has(backend) &&
+            sessionOpen &&
+            !ask &&
+            !monitoring &&
+            !dispatchTurn.dispatched &&
+            !dispatchTurn.overBudget);
         // A turn that does not park retires a park an earlier turn left standing. The park is
         // otherwise cleared only by `sendMessage`, and a parked session can wake without one:
         // Claude Code re-invokes the model itself when a background command or sub-agent it
