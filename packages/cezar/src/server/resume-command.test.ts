@@ -31,14 +31,20 @@ describe('resumeCommand — session id validation', () => {
   // Every runner id must map to a command — an id that fell through to the `claude` default
   // would hand the user a `claude --resume` for a session claude does not own (#387). Cursor is
   // excluded from the generic `${runner} ` check: its CLI binary is `agent`, not `cursor` (the
-  // specific assertion above covers it).
-  it.each(RUNNER_IDS.filter((runner) => runner !== 'cursor'))(
+  // specific assertion below covers it). Ollama is excluded too: an HTTP chat backend with no
+  // CLI that owns its sessions, so it fails closed to null instead.
+  it.each(RUNNER_IDS.filter((runner) => runner !== 'cursor' && runner !== 'ollama'))(
     'maps %s to its own CLI, never silently to claude',
     (runner) => {
       const id = '9f8e7d6c-1234-4abc-9def-0123456789ab';
       expect(resumeCommand(runner, id)?.startsWith(`${runner} `)).toBe(true);
     },
   );
+
+  it('fails closed for ollama — an HTTP backend no CLI can resume', () => {
+    const id = '9f8e7d6c-1234-4abc-9def-0123456789ab';
+    expect(resumeCommand('ollama', id)).toBeNull();
+  });
 
   it('never emits a quote character — a POSIX quote would reach cmd.exe literally on win32', () => {
     const cmd = resumeCommand('claude', 'ses_01ABC.def-42');

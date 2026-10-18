@@ -8058,6 +8058,10 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     case 'copilot':
       // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
       return `copilot --resume ${sessionId}`;
+    case 'ollama':
+      // An HTTP chat backend — no CLI owns its sessions, so resume fails closed (409) rather
+      // than handing the user a foreign CLI's resume command (#387).
+      return null;
     default:
       return `claude --resume ${sessionId}`;
   }
