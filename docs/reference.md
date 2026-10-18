@@ -478,7 +478,7 @@ Useful environment variables:
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_JUNIE_BIN=/path/to/junie` | Override which `junie` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
-| `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
+| `CEZ_CURSOR_AGENT_BIN=/path/to/cursor-agent` | Override which Cursor Agent CLI binary is used. Unset: `cursor-agent` on PATH, then `~/.local/bin/cursor-agent`, then `agent` on PATH. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
 | `CEZ_OLLAMA_BIN=/path/to/ollama` | Override which `ollama` binary is used (provider probe and host detection). The runner itself talks HTTP to `OLLAMA_HOST` (default `http://127.0.0.1:11434`) — that variable, not the binary, decides where a non-default server lives. |
