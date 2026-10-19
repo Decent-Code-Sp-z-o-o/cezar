@@ -2806,8 +2806,9 @@ export function createApp(deps: ServerDeps) {
         }
         if (!removed) return c.json({ error: `unknown account: ${id}` }, 404);
         // Only this account's answer: it is about to stop existing, and holding it would let a
-        // re-added account with the same id read the deleted one's state.
-        providerAuth.forgetProfileStatus(removedProvider, id);
+        // re-added account with the same id read the deleted one's state — its incident included.
+        if (removedProvider) providerAuth.forgetProfile(removedProvider, id);
+        else providerAuth.forgetProfileStatus(removedProvider, id);
         return c.json({ removed: true as const, id });
       },
     );
@@ -5257,6 +5258,19 @@ export function createApp(deps: ServerDeps) {
       return c.json(result.commit);
     })
 
+    // The run's whole path index — `/repo/tree` against the task's worktree. Backs the ⌘P
+    // palette's `#` file search (spec 2026-10-17-task-palette); `/runs/:id/files` serves the file.
+    .get('/runs/:id/tree', async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const workingDirectory = workingDirectoryOf(run, repoRoot);
+      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      const result = await listRepoPaths(workingDirectory);
+      if (!result.ok) return c.json({ error: result.error }, 409);
+      return c.json({ paths: result.paths, truncated: result.truncated });
+    })
+
     // Files tab: directory listing (path omitted or a dir) or file content
     // (size-capped, binary flagged). Traversal-safe — readWorktreePath rejects
     // anything escaping the worktree. `raw=1` (R5 Step 1.6) serves the BYTES of
@@ -7625,8 +7639,10 @@ export function createApp(deps: ServerDeps) {
       '/telemetry/event',
       jsonZodValidator(telemetryEventInputSchema, { message: 'invalid event' }),
       (c) => {
-        const { event, label } = c.req.valid('json');
-        track(event, { label }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+        const body = c.req.valid('json');
+        // `value` only on the batched events, and only when sent — every other relay stays `{ label }`.
+        const value = 'value' in body ? body.value : undefined;
+        track(body.event, { label: body.label, ...(value !== undefined ? { value } : {}) }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
         return c.body(null, 204);
       },
     )
