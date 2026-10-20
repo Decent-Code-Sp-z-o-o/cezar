@@ -91,6 +91,7 @@ import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import { deleteRunLayouts } from '../runs/layouts.ts';
 import {
   autosaveCommit,
+  branchFor,
   chooseForkBase,
   commitAll,
   pushBranch,
@@ -104,6 +105,7 @@ import {
 } from '../git-worktree.ts';
 import { commentOnIssue, commentOnPr, fetchGithubChecks, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
+import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -242,6 +244,9 @@ type GraphParkOutcome =
   | { kind: 'cancelled' };
 
 /** Most recent graph transitions kept on the record — loops are bounded, but a record is not a log. */
+/** Runs a restart interrupts — the self-update dialog's "N tasks are running" (#1524). */
+const RESTART_SENSITIVE: ReadonlySet<RunRecord['status']> = new Set<RunRecord['status']>(['queued', 'waiting', 'running']);
+
 const GRAPH_TAKEN_CAP = 500;
 
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
@@ -519,6 +524,10 @@ interface ActiveRun {
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
+  /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
+  finishRequested?: boolean;
+  /** Review accepted while the engine was still tearing down; `dropActive` applies it. */
+  acceptReviewOnDrop?: boolean;
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -873,6 +882,10 @@ export interface StartRunInput {
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
   worktree?: boolean;
+  /** With `worktree: false`: switch the repo checkout to a branch forked from the base first
+   *  (spec 2026-10-19-repo-git-sync). `branch` names it; else the namer, else `cez/<id8>`. */
+  newBranch?: boolean;
+  branch?: string;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
    *  cap is hit. No "needs you" is ever raised. */
@@ -1243,6 +1256,9 @@ export class RunManager {
   // registering in `active`, so parallel-slot counting is never racy.
   private readonly queue: string[] = [];
   private readonly starting = new Set<string>();
+  // Runs cancelled inside that window: there is no `ActiveRun` to flag yet, so the starter checks
+  // here once it has one to build (`abandonCancelledStart`).
+  private readonly cancelledStarting = new Set<string>();
   // Runs parked at `waiting` (open session, ball in the user's court). They
   // don't consume a `maxParallel` slot (#347) — an idle claude process costs
   // memory but no tokens, queued work progressing matters more, and the idle
@@ -1397,6 +1413,7 @@ export class RunManager {
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
+      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status)).length,
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -1469,6 +1486,7 @@ export class RunManager {
     this.monitoring.clear();
     this.unitParents.clear();
     this.starting.clear();
+    this.cancelledStarting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
     this.pendingBranchNames.clear();
@@ -1673,6 +1691,10 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
+    // On the record, not only the input: restart recovery rebuilds the run from it.
+    if (run.worktree === false && input.newBranch) {
+      this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
+    }
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -1933,7 +1955,8 @@ export class RunManager {
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
-              this.starting.delete(runId);
+              // A cancel that landed before the throw still owes the parent its report.
+              if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
             });
             continue;
           }
@@ -2265,6 +2288,18 @@ export class RunManager {
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
 
+  /**
+   * A run cancelled while still `starting` (see `cancelOne`): leave the window without a session,
+   * settling the way `dropActive` does — report to a parent, free the slot.
+   */
+  private abandonCancelledStart(runId: string): boolean {
+    if (!this.cancelledStarting.delete(runId)) return false;
+    this.starting.delete(runId);
+    this.reportSettledChildToParent(runId);
+    this.releaseSlot();
+    return true;
+  }
+
   /** Fence a continuation failure to the async owner that started it. */
   private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
@@ -2284,6 +2319,10 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
+    if (state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review') {
+      this.store.updateRun(runId, { status: 'done' });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+    }
     state?.releaseWorktree?.();
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
@@ -3576,7 +3615,15 @@ export class RunManager {
       return true;
     }
     const state = this.active.get(runId);
-    if (!state) return false;
+    if (!state) {
+      // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
+      // Refusing here let the run start right after the user cancelled it.
+      if (!this.starting.has(runId)) return false;
+      this.cancelledStarting.add(runId);
+      this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+      return true;
+    }
     state.cancelled = true;
     this.clearIdleTimer(state);
     try {
@@ -3622,7 +3669,8 @@ export class RunManager {
     const result = state?.session?.result;
     if (!this.isActive(runId)) return true;
     if (!this.cancel(runId)) return false;
-    if (!result) return !this.isActive(runId);
+    // A run cancelled while `starting` has no session yet: it leaves once its gate await returns.
+    if (!result) return this.cancelledStarting.has(runId) ? this.waitInactive(runId, 10_000) : !this.isActive(runId);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settled = await Promise.race([
       result.then(() => true, () => true),
@@ -3630,6 +3678,12 @@ export class RunManager {
     ]);
     if (timer) clearTimeout(timer);
     return settled && !this.isActive(runId);
+  }
+
+  private async waitInactive(runId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.isActive(runId) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    return !this.isActive(runId);
   }
 
   private parkLifecycle(runId: string, state: ActiveRun, operationId?: string): void {
@@ -3924,7 +3978,7 @@ export class RunManager {
     // the state — seconds before the session opens — so checking `starting`
     // alone would reopen exactly the drop this rung exists to close.
     const state = this.active.get(runId);
-    const startingUp = this.starting.has(runId) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
+    const startingUp = (this.starting.has(runId) && !this.cancelledStarting.has(runId)) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
     if (!startingUp) return false;
     const pending = this.deferredMessages.get(runId) ?? [];
     pending.push(content);
@@ -4104,11 +4158,30 @@ export class RunManager {
       // other Finish (`done`, or `review` when the worktree holds changes)
       // instead of the `failed` an abandoned live park would settle as.
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      state.finishRequested = true;
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
       return true;
     }
     const run = this.store.getRun(runId);
+    // The session already closed (agent's DONE, idle watchdog, an earlier Finish) but the engine
+    // has not settled yet, so the record still says `waiting`. Finish in that window is the same
+    // explicit intent as above — honor it on the settlement instead of answering 409 (6a3cecee).
+    if (state && !state.cancelled && state.sessionEverOpened && run?.status === 'waiting') {
+      state.idleClosed = undefined;
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      if (!state.finishRequested) {
+        state.finishRequested = true;
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user while the session was closing' });
+      }
+      return true;
+    }
+    // Settled at `review`, but still unwinding (autosave, teardown): accept once it lets go. A
+    // repeat of a Finish already pressed on this session is not an accept — it stays at review.
+    if (state && !state.cancelled && run?.status === 'review') {
+      if (!state.finishRequested) state.acceptReviewOnDrop = true;
+      return true;
+    }
     if (run?.status === 'review' && !this.isActive(runId)) {
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
@@ -4150,7 +4223,7 @@ export class RunManager {
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
-    if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
+    if (this.active.has(runId) || this.starting.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
@@ -4283,6 +4356,9 @@ export class RunManager {
       return { ok: true };
     }
     const ownerToken = Symbol('run-owner');
+    // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
+    // registers it in `active`.
+    this.starting.add(runId);
     void this.runContinuation(
       runId,
       stepId,
@@ -4300,6 +4376,8 @@ export class RunManager {
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
+        // A cancel that landed before the throw still owes the parent its report.
+        if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
       },
     );
     return { ok: true };
@@ -4347,6 +4425,7 @@ export class RunManager {
       : requestedBackend;
     const beforePreparation = this.store.getRun(runId);
     const gatedContinuation = !!beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId).catch(() => true);
+    if (this.abandonCancelledStart(runId)) return;
     if (beforePreparation?.worktreePath && gatedContinuation) {
       // Keep the original continuation intent durable before any script can start.
       const preparing: ActiveRun = {
@@ -4363,7 +4442,10 @@ export class RunManager {
       }, preparationController.signal, {branch: beforePreparation.branch});
       if (preparing.cancelled) { this.dropActive(runId, preparing); return; }
       if (!gate.ready) { this.parkLifecycle(runId, preparing, gate.operationId); return; }
-    } else await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+    } else {
+      await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+      if (this.abandonCancelledStart(runId)) return;
+    }
     const record = this.store.getRun(runId);
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
@@ -5042,17 +5124,35 @@ export class RunManager {
       this.dropActive(runId, state);
       return;
     }
+    let switchInPlaceTo: string | undefined;
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
       // repository-root lease serializes these runs by default; the explicit
       // CEZ_DISABLE_REPO_LOCK=1 escape hatch allows unsafe overlap.
-      // Pin the starting commit: the session's Changes and Commits views use it
-      // as their stable lower bound while reading the current working copy.
-      const startingCommit = await getHeadCommit(repo.root);
-      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
-      // In-place runs never fork, so nothing will ever read the namer's branch answer.
-      this.pendingBranchNames.delete(runId);
-      emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
+      const recordedRun = this.store.getRun(runId);
+      if (recordedRun?.inPlaceBranch) {
+        // spec 2026-10-19-repo-git-sync: fork the checkout itself onto a task branch. A recorded
+        // branch that already exists (restart, or the user's own name) is switched to instead.
+        const branch =
+          recordedRun.branch ??
+          (await this.awaitGeneratedBranch(runId, config.branchNaming, (message) => emit({ type: 'note', message }))) ??
+          branchFor(runId);
+        if (state.cancelled) {
+          this.dropActive(runId, state);
+          return;
+        }
+        // Recorded now so a requeue keeps the name; switched once the repo-root lease is held.
+        this.store.updateRun(runId, { branch });
+        switchInPlaceTo = branch;
+      } else {
+        // In-place runs never fork, so nothing will ever read the namer's branch answer.
+        this.pendingBranchNames.delete(runId);
+        emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
+        // Pin the starting commit: the session's Changes and Commits views use it
+        // as their stable lower bound while reading the current working copy.
+        const startingCommit = await getHeadCommit(repo.root);
+        if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
+      }
     } else if (repo) {
       emit({
         type: 'note',
@@ -5163,6 +5263,29 @@ export class RunManager {
       // check also covers the explicit lock-bypass path, where the account may close while the
       // run is preparing its first step.
       if (this.requeueWhileHeld(runId, workflow, input, taskBackend, state)) return;
+    }
+    if (repo && switchInPlaceTo && !state.cancelled) {
+      // Re-read HEAD: the lease wait may have let another in-place run move the checkout.
+      const current = (await getRepoInfo(this.repoRoot))?.branch ?? repo.branch;
+      const base = await chooseForkBase(this.repoRoot, current, config.baseBranch, (message) =>
+        emit({ type: 'note', message }),
+      );
+      const switched = await createOrSwitchBranch(repo.root, switchInPlaceTo, base);
+      if (!switched.ok) {
+        const error = `could not switch the checkout to ${switchInPlaceTo}: ${switched.error}`;
+        this.store.updateRun(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
+        emit({ type: 'lifecycle', message: `run failed — ${error}` });
+        this.dropActive(runId, state);
+        return;
+      }
+      emit({
+        type: 'note',
+        message: switched.created
+          ? `worktree off — created ${switched.branch} from ${base} in the repo working tree`
+          : `worktree off — switched the repo working tree to ${switched.branch}`,
+      });
+      const startingCommit = await getHeadCommit(repo.root);
+      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
     }
 
     // Handoff journal (spec 007) — seeded after the worktree exists so the
@@ -6904,6 +7027,9 @@ export class RunManager {
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
+      // A Finish pressed on an earlier step's session is not a repeat of one on this session.
+      state.finishRequested = undefined;
+      state.acceptReviewOnDrop = undefined;
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
@@ -7395,7 +7521,10 @@ export class RunManager {
    * the only place the diff and the draft-PR action live.
    */
   private async idleClosedFails(runId: string, state: ActiveRun): Promise<boolean> {
-    return state.idleClosed === true && !(await this.reviewGateApplies(runId));
+    if (state.idleClosed !== true) return false;
+    const reviewGate = await this.reviewGateApplies(runId);
+    // A Finish may land during that git await and clear the inactivity evidence (6a3cecee).
+    return state.idleClosed === true && !reviewGate;
   }
 
   /**

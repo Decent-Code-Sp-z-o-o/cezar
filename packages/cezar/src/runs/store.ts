@@ -9,13 +9,13 @@ import {
   openSync,
   readFileSync,
   readSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
@@ -393,6 +393,8 @@ export const runRecordSchema = z.object({
   /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
   worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
+  /** An in-place run that switched the repo checkout to `branch` before it started. */
+  inPlaceBranch: z.literal(true).optional(),
   /** The task's own branch, created off `baseBranch`: `cez/<id8>` unless branch naming
    *  instructions named it (spec 2026-10-11-branch-naming-instructions) — read it, never recompute it. */
   branch: z.string().optional(),
@@ -494,6 +496,8 @@ const MAX_RUNS_KEPT = 300;
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
 const MAX_ARCHIVED_KEPT = 500;
+/** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
+const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
 // Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
 const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
@@ -1837,12 +1841,22 @@ export class RunStore extends EventEmitter {
     return this.runs.delete(id);
   }
 
+  /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
+   *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
+   *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
   private pruneOldRuns(): void {
     const all = this.listRuns();
+    const pinned = new Set<string>();
+    for (const run of all) {
+      if (!LIVE_STATUSES.has(run.status)) continue;
+      pinned.add(run.id);
+      if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
+      if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
+    }
     const stalePool = [
       ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
       ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
-    ];
+    ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
       try {
@@ -1872,7 +1886,7 @@ export class RunStore extends EventEmitter {
     const tmpPath = `${indexPath}.tmp`;
     try {
       writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, pretty ? 2 : undefined), 'utf8');
-      renameSync(tmpPath, indexPath);
+      renameSyncWithRetry(tmpPath, indexPath);
     } catch (err) {
       if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);

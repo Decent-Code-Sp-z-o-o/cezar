@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { effectiveStartAppSchema } from './start-app.ts';
+
 /**
  * Web terminal (spec `.ai/specs/2026-10-10-terminal-tab.md`). One HTTP shape: the
  * session POST that mints a single-use upgrade token. The WS frames that carry
@@ -148,7 +150,14 @@ export const discoveredCommandSchema = z.object({
 });
 export type DiscoveredCommandEntry = z.infer<typeof discoveredCommandSchema>;
 
-export const discoveredCommandsSchema = z.object({ commands: z.array(discoveredCommandSchema) });
+export const discoveredCommandsSchema = z.object({
+  commands: z.array(discoveredCommandSchema),
+  /** What installs the worktree's dependencies, present only when it has a `package.json` and no
+   *  `node_modules` of its own. "Run the app" runs it first. */
+  install: z.string().optional(),
+  /** The project's start recipe, when one is defined — personal over project. */
+  recipe: effectiveStartAppSchema.optional(),
+});
 export type DiscoveredCommandsResponse = z.infer<typeof discoveredCommandsSchema>;
 
 export const terminalSessionParamsSchema = z.object({

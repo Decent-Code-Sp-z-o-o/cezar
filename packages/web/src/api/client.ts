@@ -8,6 +8,8 @@ import { trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } 
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
+  StartAppSet,
+  StartAppState,
   TerminalCreateInput,
   TerminalOutput,
   TerminalSession,
@@ -56,6 +58,7 @@ import type {
   WorktreesResponse,
   ContinueResponse,
   CreatePrResponse,
+  AdoptPrResponse,
   CreateRunInput,
   CreateRunResponse,
   DeleteDraftResponse,
@@ -111,6 +114,8 @@ import type {
   UpdateProjectResponse,
   RemoveTodoResponse,
   RepoBranchResponse,
+  RepoSync,
+  RepoSyncActionResponse,
   RepoCommitPayload,
   RunCommitsResponse,
   RunHistoryContext,
@@ -1707,6 +1712,16 @@ export async function createRunPr(id: string, opts: { draft?: boolean } = {}): P
   }
 }
 
+/** Record the PR the run's agent opened, found on the forge by the run's branch. */
+export async function adoptRunPr(id: string): Promise<AdoptPrResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pr.adopt.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/pr/adopt'),
+  )
+}
+
 /** Rename a run (#389): the edit becomes the display title and wins over any auto-summary. */
 export async function patchRun(id: string, patch: PatchRunInput): Promise<RunRecord> {
   return unwrap(
@@ -2076,6 +2091,32 @@ export async function createRepoBranch(input: { name: string; from?: string }): 
     }),
     '/repo/branch',
   )
+}
+
+/** The main checkout against its remote (Source-Control view): offline, as last fetched. */
+export async function getRepoSync(opts?: ReadOptions): Promise<RepoSync> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.sync.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/repo/sync',
+  )
+}
+
+export type RepoSyncAction = 'fetch' | 'pull' | 'push' | 'sync'
+
+/** Fetch / pull (fast-forward only) / push / sync the main checkout. A diverged branch, no
+ *  upstream or an auth failure is a 409 whose ApiError carries git's own reason. */
+export async function runRepoSyncAction(action: RepoSyncAction): Promise<RepoSyncActionResponse> {
+  const param = { param: { projectId: queryScope() } }
+  const repo = cez.api.v1.p[':projectId'].repo
+  const res =
+    action === 'fetch'
+      ? await repo.fetch.$post(param)
+      : action === 'pull'
+        ? await repo.pull.$post(param)
+        : action === 'push'
+          ? await repo.push.$post(param)
+          : await repo.sync.$post(param)
+  return unwrap(res, `/repo/${action}`)
 }
 
 // ---- plan mode (spec 008) -------------------------------------------------------------------
@@ -2590,6 +2631,21 @@ export async function applySelfUpdate(version: string): Promise<SelfUpdateStatus
   )
 }
 
+/** "Update when idle": the server applies `version` once no task is running or queued. */
+export async function scheduleSelfUpdate(version: string): Promise<SelfUpdateStatus> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].apply.$post({ json: { version, whenIdle: true } }),
+    '/workspace/self-update/apply',
+  )
+}
+
+export async function cancelScheduledSelfUpdate(): Promise<SelfUpdateStatus> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].scheduled.$delete({}),
+    '/workspace/self-update/scheduled',
+  )
+}
+
 /** Partial update — absent keys stay untouched; answers the merged config. A `projectsDir`
  *  the server cannot write to comes back as a 400 `ApiError` whose message is the reason,
  *  which is exactly what the Projects pane renders inline (step 4.4). */
@@ -2788,6 +2844,22 @@ export async function getRunTerminalCommands(id: string): Promise<DiscoveredComm
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/terminal/commands'),
+  )
+}
+
+/** The project's start recipes, the team's and this user's (spec `2026-10-09-design-mode` §7c). */
+export async function getStartApp(): Promise<StartAppState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['start-app'].$get({ param: { projectId: queryScope() } }),
+    '/start-app',
+  )
+}
+
+/** Save or (with `recipe: null`) remove one scope's start recipe. */
+export async function setStartApp(body: StartAppSet): Promise<StartAppState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['start-app'].$put({ param: { projectId: queryScope() }, json: body }),
+    '/start-app',
   )
 }
 

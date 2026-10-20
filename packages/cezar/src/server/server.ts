@@ -14,12 +14,13 @@ import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociatio
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
-  terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
+  startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
 import { workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
-import { discoverCommands } from './terminal/commands.ts';
+import { discoverCommands, installCommand } from './terminal/commands.ts';
+import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
 import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
@@ -47,7 +48,7 @@ import {
 } from '../automations/types.ts';
 import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
-import { access, constants as fsConstants, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -269,9 +270,12 @@ import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { createProjectInputSchema } from '@open-mercato/cezar-contract';
 import { createProject, listGithubOwners, type CommandRunner } from './create-project.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
+import { fetchRepo, pullRepo, pushRepo, repoSyncStatus, syncRepo, type SyncActionResult } from './repo-sync.ts';
+import type { RepoSync } from '@open-mercato/cezar-contract';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
+import { renameWithRetry } from '../fs-rename.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
@@ -290,6 +294,7 @@ import {
   withResolvedClaudeBin,
 } from './open-in-app.ts';
 import { createDraftPr, type DraftPrOutcome } from './pr.ts';
+import { findBranchPr, resolvePrTarget } from './forge/github.ts';
 import {
   DEFAULT_TELEMETRY_URL,
   TELEMETRY_POLICY_VERSION,
@@ -778,6 +783,10 @@ const startRunSchema = z
     // Composer worktree opt-out (#worktree-toggle): false runs in the repo
     // working tree. Ignored when variants > 1.
     worktree: z.boolean().optional(),
+    // With worktree:false, switch the checkout to a branch forked from base first
+    // (spec 2026-10-19-repo-git-sync); `branch` names it.
+    newBranch: z.boolean().optional(),
+    branch: z.string().trim().min(1).max(200).optional(),
     // Autonomous mode (#autonomous): the run never parks at `waiting` — it
     // auto-continues until the agent signals done. No "needs you" is raised.
     autonomous: z.boolean().optional(),
@@ -2141,10 +2150,16 @@ export function createApp(deps: ServerDeps) {
     return prefixed === null ? null : `cd '${cwd}' && ${prefixed}`;
   };
 
-  /** A registered project's realpath'd root, or null when the id is unknown. */
+  /** A project's realpath'd root, or null when the id is unknown. The boot project resolves to
+   *  `bootRoot` even without a registry row — `resolveProjectScope` serves it the same way, and a
+   *  repo booted into a non-empty registry is never registered (telemetry d81f8db7). */
   const projectRootFor = async (projectId: string): Promise<string | null> => {
     try {
-      return (await loadWorkspaceConfig()).projects.find((p) => p.id === projectId)?.root ?? null;
+      const registry = (await loadWorkspaceConfig()).projects;
+      const registered = registry.find((p) => p.id === projectId)?.root;
+      if (registered !== undefined) return registered;
+      if (projectId !== 'default' && projectId !== (await resolveBootProject(registry))) return null;
+      return await realpath(bootRoot).catch(() => bootRoot);
     } catch {
       return null;
     }
@@ -2731,11 +2746,10 @@ export function createApp(deps: ServerDeps) {
         // checkout. No project to resolve, and therefore no 404 path.
         let root: string | null = null;
         if (projectId !== null) {
-          const resolvedId = projectId === 'default' ? await resolveBootProject() : projectId;
           // Keyed by repo ROOT, so the selection survives the registry being rebuilt and needs no
           // cross-reference into config.json. An unknown project is a 404 rather than an orphan
           // entry nobody will ever read.
-          root = await projectRootFor(resolvedId);
+          root = await projectRootFor(projectId);
           if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
         }
         // A user naming an account that does not exist gets told so — the opposite of how RUN
@@ -3410,7 +3424,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(await selfUpdate.status());
     })
 
-    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version }' }), async (c) => {
+    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version, whenIdle? }' }), async (c) => {
       const { version: target } = c.req.valid('json');
       // SECURITY: a hosted cockpit may only move FORWARD. Installing a published package cannot
       // inject code, but installing an OLDER one can: every hosted-mode guard — the `/api/*`
@@ -3426,11 +3440,18 @@ export function createApp(deps: ServerDeps) {
         if (refusal) return c.json({ error: refusal }, 409);
       }
       try {
-        selfUpdate.apply(target);
+        if (c.req.valid('json').whenIdle) selfUpdate.scheduleWhenIdle(target);
+        else selfUpdate.apply(target);
       } catch (error) {
         if (error instanceof SelfUpdateBusyError) return c.json({ error: error.message }, 409);
         return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
       }
+      return c.json(await selfUpdate.status());
+    })
+
+    // Cancels a pending "update when idle"; a no-op when nothing is scheduled.
+    .delete('/workspace/self-update/scheduled', async (c) => {
+      selfUpdate.cancelScheduled();
       return c.json(await selfUpdate.status());
     });
 
@@ -3634,7 +3655,7 @@ export function createApp(deps: ServerDeps) {
       const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(tmp, bytes, { mode: 0o600, flag: 'wx' });
-        await rename(tmp, path);
+        await renameWithRetry(tmp, path);
       } catch (error) {
         await unlink(tmp).catch(() => {});
         throw error;
@@ -4694,6 +4715,8 @@ export function createApp(deps: ServerDeps) {
         images,
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
+        newBranch: parsed.data.newBranch,
+        branch: parsed.data.branch,
         autonomous: parsed.data.autonomous,
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
@@ -5467,6 +5490,25 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
       }
       return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
+    })
+
+    // Create PR by the task's agent: once its turn ends, the PR it opened is found by branch and
+    // recorded, even if the agent never declared `CEZ:PR`. Best-effort; the status stays.
+    .post('/runs/:id/pr/adopt', async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      const id = c.req.param('id');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.pullRequestUrl) return c.json({ found: true as const, url: run.pullRequestUrl });
+      const worktree = worktreeOf(run);
+      const target = worktree ? await resolvePrTarget(run) : null;
+      const pr = worktree && target ? await findBranchPr(worktree, target) : null;
+      if (!pr) return c.json({ found: false as const });
+      forgetRefStatus(repoRoot, pr.number);
+      // Unlike `POST /pr`, the status stays: the agent's session, not the cockpit, owns the run.
+      store.updateRun(id, { pullRequestUrl: pr.url });
+      store.appendEvent(id, { type: 'note', message: `PR opened by the agent: ${pr.url}` });
+      return c.json({ found: true as const, url: pr.url });
     })
 
     // Archived tasks keep their worktree for inspection; this is the explicit
@@ -6719,6 +6761,28 @@ export function createApp(deps: ServerDeps) {
     overrideRules: z.boolean().optional().default(false),
   }).strict();
 
+  // Task branches are never a base: hide the named ones (no `cez/` prefix) by record. An in-place
+  // run's branch is the user's own checkout, so it stays listed.
+  const taskOwnedBranches = (store: ProjectContext['store']): Set<string> =>
+    new Set(store.listRuns().flatMap((r) => (r.branch && r.worktree !== false ? [r.branch] : [])));
+  const runRepoSyncAction = async (
+    project: ProjectContext,
+    action: (root: string) => Promise<SyncActionResult>,
+  ): Promise<{ error: string } | { message: string; sync: RepoSync }> => {
+    const info = await getRepoInfo(project.root);
+    if (!info) return { error: 'not a git repository' };
+    // A pull moves HEAD and the working files: never under an in-place run's agent.
+    if (action === pullRepo || action === syncRepo) {
+      const live = project.store
+        .listRuns()
+        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting'));
+      if (live) return { error: 'an in-place task is running in this checkout — wait for it to finish' };
+    }
+    const result = await action(info.root);
+    if (!result.ok) return { error: result.error };
+    return { message: result.message, sync: await repoSyncStatus(info.root, taskOwnedBranches(project.store)) };
+  };
+
   // ---- chained family: repo / git (project-scoped) ----
   const repoRoutes = new Hono<ProjectApiEnv>()
     .get('/repo', async (c) => {
@@ -6733,8 +6797,7 @@ export function createApp(deps: ServerDeps) {
           checkedOutElsewhere: {},
           baseBranch: null,
         });
-      // Task branches are never a base: hide the named ones (no `cez/` prefix) by record.
-      const taskBranches = new Set(store.listRuns().flatMap((r) => (r.branch ? [r.branch] : [])));
+      const taskBranches = taskOwnedBranches(store);
       const [status, log, branches, held, config] = await Promise.all([
         getStatus(info.root),
         getLog(info.root),
@@ -6910,6 +6973,30 @@ export function createApp(deps: ServerDeps) {
       const result = await createOrSwitchBranch(info.root, parsed.data.name, parsed.data.from);
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ branch: result.branch, created: result.created });
+    })
+
+    // Source-Control sync (spec 2026-10-19-repo-git-sync): offline status, explicit network.
+    .get('/repo/sync', async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      const info = await getRepoInfo(repoRoot);
+      if (!info) return c.json({ error: 'not a git repository' }, 409);
+      return c.json(await repoSyncStatus(info.root, taskOwnedBranches(store)));
+    })
+    .post('/repo/fetch', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), fetchRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
+    })
+    .post('/repo/pull', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), pullRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
+    })
+    .post('/repo/push', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), pushRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
+    })
+    .post('/repo/sync', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), syncRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
     });
 
   // An explicit "auto" default becomes `''` on the wire (#906): the empty id IS
@@ -7335,14 +7422,41 @@ export function createApp(deps: ServerDeps) {
       return c.json(detectedUrlsSchema.parse({ urls }));
     })
     .get('/runs/:id/terminal/commands', async (c) => {
-      const { root: repoRoot, store } = c.get('project');
+      const { root: repoRoot, store, dataDir } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       // The task's own tree or nothing: suggesting the boot repo's scripts for a task would
       // offer commands that run against the wrong tree (spec §3.3). Same tree the terminal opens.
       const worktree = workingDirectoryOf(run, repoRoot);
-      const commands = worktree ? await discoverCommands(worktree) : [];
-      return c.json(discoveredCommandsSchema.parse({ commands }));
+      // A project with its own setup scripts (#1495) prepares its worktrees itself; the automatic
+      // install is only for the zero-config project that has none.
+      const setupScripts = (await readLifecycleConfigOrDefault(repoRoot)).config.afterCreate.length;
+      const [commands, install] = worktree
+        ? await Promise.all([discoverCommands(worktree), setupScripts > 0 ? null : installCommand(worktree)])
+        : [[], null];
+      const recipe = effectiveStartApp(await readStartApp(dataDir, repoRoot));
+      return c.json(
+        discoveredCommandsSchema.parse({ commands, ...(install ? { install } : {}), ...(recipe ? { recipe } : {}) }),
+      );
+    })
+    // The project's start recipe (spec `2026-10-09-design-mode` §7c): the team's in the repo
+    // config, the user's own in their registry entry. Writing one stores a command a terminal will
+    // later run, so it is refused wherever the terminal is.
+    .get('/start-app', async (c) => {
+      const { root, dataDir } = c.get('project');
+      return c.json(startAppStateSchema.parse(await readStartApp(dataDir, root)));
+    })
+    .put('/start-app', jsonZodValidator(startAppSetSchema), async (c) => {
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json({ error: refusal }, 409);
+      const { root, dataDir } = c.get('project');
+      const { scope, recipe } = c.req.valid('json');
+      try {
+        if (!(await writeStartApp(dataDir, root, scope, recipe))) {
+          return c.json({ error: 'This project is not in your project list, so it cannot keep a recipe of your own.' }, 409);
+        }
+      } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'The start recipe could not be saved' }, 409); }
+      return c.json(startAppStateSchema.parse(await readStartApp(dataDir, root)));
     })
     // Deliberately NOT policy-gated: stopping a shell is the one terminal action that reduces
     // exposure, and refusing it with the flag off would strand a running process tree with no
