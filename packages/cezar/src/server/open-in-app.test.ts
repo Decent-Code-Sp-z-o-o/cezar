@@ -240,9 +240,14 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
 
 describe('agentCliRunner', () => {
   // Driven off RUNNER_IDS, not a literal list, so runner #5 is covered the moment it is added
-  // (the pi entry was missed on the hand-written list, #387 review).
-  it.each(RUNNER_IDS)('maps cli:%s to that runner', (runner) => {
+  // (the pi entry was missed on the hand-written list, #387 review). Ollama is excluded: an HTTP
+  // chat backend with no CLI binary to hand off to, so it has no `cli:` target (asserted below).
+  it.each(RUNNER_IDS.filter((runner) => runner !== 'ollama'))('maps cli:%s to that runner', (runner) => {
     expect(agentCliRunner(`cli:${runner}`)).toBe(runner);
+  });
+
+  it('fails closed for cli:ollama — an HTTP backend has no CLI to hand off to', () => {
+    expect(agentCliRunner('cli:ollama')).toBeNull();
   });
 
   it('rejects every id that is not a CLI handoff', () => {
