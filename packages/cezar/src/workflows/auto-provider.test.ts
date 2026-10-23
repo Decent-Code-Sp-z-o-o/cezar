@@ -78,6 +78,16 @@ describe('auto provider selection', () => {
     await waitFor(() => terminal.has(store.getRun(runId)?.status ?? ''));
   }
 
+  /** Terminal status AND the hop already durable: `settleAutoFailover` turns the record over
+   *  asynchronously AFTER the step failure lands, so a plain terminal settle can release inside
+   *  that window and read the pre-hop record (the launch pick still on `runner`, no failover
+   *  count). `failoverCount` is written in the same update as the switched model, once
+   *  `continueRun` has accepted the hop — the same wait-on-the-durable-write rule as above. */
+  async function settleHopped(runId: string): Promise<void> {
+    await waitFor(() => (store.getRun(runId)?.failoverCount ?? 0) > 0);
+    await settle(runId);
+  }
+
   const lifecycleMessages = (runId: string): string[] =>
     store.readEvents(runId).filter((event) => event.type === 'lifecycle').map((event) => String(event.message ?? ''));
 
@@ -156,7 +166,7 @@ describe('auto provider selection', () => {
   it('fails over a far-out usage limit to a similar model on another provider', async () => {
     manager = new RunManager(store, repoRoot, { providerAvailability: failoverAvailability });
     const record = manager.startRun(workflow, { task: 'mock:limit ship it', runner: 'auto', worktree: false });
-    await settle(record.id);
+    await settleHopped(record.id);
 
     const hopped = store.getRun(record.id);
     // The decision, durable on the record: request echo kept, concrete runner switched, one hop
