@@ -4552,7 +4552,7 @@ export class RunManager {
         && !this.starting.has(runId) && run !== undefined && CONTINUABLE_STATUSES.includes(run.status)
         && run.steps.some((s) => s.sessionId);
       if (!settledTurn) return { ok: false, error: 'run is still active' };
-      const runner = opts.runner ?? run.runner ?? 'claude';
+      const runner = (opts.runner !== 'auto' ? opts.runner : undefined) ?? run.runner ?? 'claude';
       if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
       }
