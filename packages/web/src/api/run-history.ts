@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ApiRun, RunEvent, RunHistoryPage, RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -15,6 +15,7 @@ const COMPACT_LIVE_AT_EVENTS = 200
 const LIVE_COMPACTION_SIZE_TRIGGER = 5_000
 const COMPACTION_TIMEOUT_MS = 15_000
 const EMPTY_RUN_EVENTS: RunEvent[] = []
+const EMPTY_HISTORY_PAGES: RunHistoryPage[] = []
 
 function orderedUnique(...groups: readonly (readonly RunEvent[])[]): RunEvent[] {
   const bySeq = new Map<number, RunEvent>()
@@ -126,6 +127,8 @@ export interface RunHistoryState {
   isPending: boolean
   contextPending: boolean
   fallback: boolean
+  /** The fallback replay holds only the newest part of the session (#882). */
+  fallbackTruncated: boolean
   hasOlder: boolean
   isFetchingOlder: boolean
   olderError: string | undefined
@@ -202,11 +205,16 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   }
   // With maxPages, TanStack may evict the cursorless newest page while older pages remain. The
   // tail is kept outside that window so the live cursor never starts after an evicted segment.
-  // The last retained page is only a final recovery for pre-existing cache shapes.
-  const newestPage = newestPageRef.current
-    ?? cachedNewestPage
-    ?? cachedTail
-    ?? (pages.length > 0 ? pages.at(-1) : undefined)
+  // A page with a newer cursor never anchors the live stream (#2018).
+  const newestPage = newestPageRef.current ?? cachedNewestPage ?? cachedTail
+  // A refetch rebuilds the window forward from its oldest cursor, so it can end short of the
+  // newest page; once the tail is gone too, reload the newest page instead.
+  const missingNewest = !fallback && pages.length > 0 && newestPage === undefined
+  useEffect(() => {
+    if (missingNewest) void queryClient.resetQueries({ queryKey: historyKey, exact: true })
+  }, [missingNewest, ownerKey, queryClient])
+  // Until that reload lands, paint nothing rather than the stale, short window.
+  const shownPages = missingNewest ? EMPTY_HISTORY_PAGES : pages
   const compactingOwnerRef = useRef<string | undefined>(undefined)
   const compactLive = useCallback(async (liveEvents: readonly RunEvent[]): Promise<RunEventCompaction | false> => {
     if (runId === undefined || compactingOwnerRef.current === ownerKey) return false
@@ -270,8 +278,9 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
       // and the stream re-arms its request latch so a later batch can retry.
       return false
     } finally {
+      // No abort here: the request has settled (or the timeout already aborted it), and a late
+      // abort only reaches foreign code still watching the signal (a4d1471e).
       clearTimeout(timeout)
-      controller.abort()
       if (compactingOwnerRef.current === ownerKey) compactingOwnerRef.current = undefined
     }
   }, [historyKey, ownerKey, queryClient, runId, tailKey])
@@ -291,7 +300,9 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
     onCompact: compactLive,
     onRun,
   } : { onRun })
-  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun })
+  const [truncatedOwner, setTruncatedOwner] = useState<string | undefined>(undefined)
+  const onTruncated = useCallback(() => setTruncatedOwner(ownerKey), [ownerKey])
+  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun, onTruncated })
   const liveEvents = useThrottledValue(liveFrames, LIVE_FRAME_MS, runId)
   const fallbackEvents = useThrottledValue(fallbackFrames, LIVE_FRAME_MS, runId)
   const fallbackTailRef = useRef<{ runId: string | undefined; scope: string; events: RunEvent[] }>({
@@ -307,11 +318,11 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
 
   const pagedEvents = useMemo(
     () => {
-      const groups = pages.map((page) => page.events as RunEvent[])
-      if (newestPage !== undefined && !pages.includes(newestPage)) groups.push(newestPage.events as RunEvent[])
+      const groups = shownPages.map((page) => page.events as RunEvent[])
+      if (newestPage !== undefined && !shownPages.includes(newestPage)) groups.push(newestPage.events as RunEvent[])
       return orderedUnique(...groups)
     },
-    [newestPage, pages],
+    [newestPage, shownPages],
   )
   useEffect(() => {
     const page = newestCursorlessPage(pages)
@@ -395,9 +406,10 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   return {
     visibleEvents,
     currentEvents,
-    isPending: !fallback && history.isPending,
+    isPending: !fallback && (history.isPending || missingNewest),
     contextPending: !fallback && context.isPending,
     fallback,
+    fallbackTruncated: fallback && truncatedOwner === ownerKey,
     hasOlder: !fallback && Boolean(history.hasPreviousPage),
     isFetchingOlder: history.isFetchingPreviousPage,
     olderError: history.isFetchPreviousPageError

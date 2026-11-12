@@ -1,12 +1,5 @@
-import {
-  ExternalLinkIcon,
-  FileQuestionIcon,
-  FileWarningIcon,
-  FileXIcon,
-  MousePointerClickIcon,
-  TriangleAlertIcon,
-} from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { ExternalLinkIcon, FileQuestionIcon, FileWarningIcon, FileXIcon, MousePointerClickIcon, TriangleAlertIcon } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import { ApiError, repoFileRawUrl, runFileRawUrl } from '@/api/client'
 import { useRepoFile, useRunFile } from '@/api/queries'
@@ -68,10 +61,13 @@ export function FilePreview({
   source,
   path,
   className,
+  headerActions,
 }: {
   source: FileSource
   path: string | null
   className?: string
+  /** Extra controls in the file's header row (Git → Files: Assess impact on a spec). */
+  headerActions?: ReactNode
 }) {
   const entry = useFileEntry(source, path ?? undefined)
 
@@ -117,17 +113,19 @@ export function FilePreview({
     // Directories are the tree's business; a stale selection that became a dir shows nothing.
     return null
   }
-  return <FileEntryView source={source} entry={entry.data} className={className} />
+  return <FileEntryView source={source} entry={entry.data} className={className} headerActions={headerActions} />
 }
 
 function FileEntryView({
   source,
   entry,
   className,
+  headerActions,
 }: {
   source: FileSource
   entry: Extract<WorktreeEntry, { type: 'file' }>
   className?: string
+  headerActions?: ReactNode
 }) {
   const kind = previewKind(entry)
   const markdown = kind === 'markdown'
@@ -169,6 +167,11 @@ function FileEntryView({
           </a>
         )}
       </header>
+      {headerActions ? (
+        <div data-slot="file-preview-actions" className="border-b border-border px-4 py-2">
+          {headerActions}
+        </div>
+      ) : null}
       {kind === 'image' ? (
         <div className="flex justify-center p-4">
           {/* Raw bytes from the same origin the JSON came from — no auth story to get wrong. */}
@@ -317,7 +320,7 @@ function useFileTokens(path: string, text: string): SynToken[][] {
   return highlightSync(text, lang)?.tokens ?? plain
 }
 
-function CodeLines({ path, text }: { path: string; text: string }) {
+export function CodeLines({ path, text }: { path: string; text: string }) {
   const tokens = useFileTokens(path, text)
   return (
     <div

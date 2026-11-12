@@ -4,11 +4,14 @@ import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
+import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import { usableRunners } from '@/lib/provider-status'
 import {
   modelConflictsWithRunner,
   modelsForRunner,
   modelCatalogStatus,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   runnerOverride,
@@ -36,6 +39,8 @@ import { readFollowupSelection, writeFollowupSelection } from '@/routes/github/h
 export interface EnginePick {
   runner: Runner | 'auto' | null
   model: string | null
+  /** `null` is untouched; `''` explicitly returns a continuation to Codex's native default. */
+  reasoningEffort?: string | null
   /**
    * Which login of that agent runs it (spec 2026-07-29-agent-profiles). Three states, and the
    * first two are NOT the same thing: `null` follows the project's selection (and keeps following
@@ -53,6 +58,8 @@ export interface ResolvedEngine {
   /** A sticky/user pick must ride the request even when it currently equals the default. */
   runnerExplicit: boolean
   model: string
+  reasoningEffort: string
+  reasoningEfforts: ReturnType<typeof reasoningEffortsForModel>
   /** The backends this host offers — the runner pill renders only when there is a choice. */
   runners: readonly Runner[]
   /** What the active project's server context would pick from its authoritative config. */
@@ -87,6 +94,10 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   const catalogRunner: Runner = runner === 'auto' ? (defaultRunner ?? runners[0] ?? 'claude') : runner
   const catalog = useRunnerModels(catalogRunner, runner !== 'auto')
   const modelsLocked = config.data?.modelsLocked === true
+  // The catalog helpers take a CONCRETE runner: under `auto` they see the stand-in the pill
+  // already fetches the catalog with, while the pill itself keeps showing `auto`.
+  const model = resolveModel(modelsLocked ? null : pick.model, catalogRunner, config.data?.defaultModels, catalog.data)
+  const reasoningEfforts = reasoningEffortsForModel(catalogRunner, model, catalog.data)
   // Agent accounts (spec 2026-07-29-agent-profiles), read through the shared hook the /new composer
   // and the thread's Continue read, so no start surface can disagree about which login runs.
   const { accounts, repoAccount } = useAgentAccounts()
@@ -98,7 +109,9 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   return {
     runner,
     runnerExplicit: pick.runner !== null,
-    model: resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data),
+    model,
+    reasoningEffort: resolveReasoningEffort(pick.reasoningEffort ?? null, catalogRunner, model, catalog.data),
+    reasoningEfforts,
     runners,
     defaultRunner,
     canRun: providers.isSuccess && runners.length > 0,
@@ -216,10 +229,11 @@ function useEnginePickValidity(pick: EnginePick, onChange: (pick: EnginePick) =>
  * and explicitly sends the provider-status fallback when it is not. A sticky/user pick always
  * rides the request, so a boot-project snapshot can never erase that intent.
  */
-export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model'> {
+export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model' | 'reasoningEffort'> {
   return {
     runner: runnerOverride(resolved.runner, resolved.defaultRunner, resolved.runnerExplicit),
     model: resolved.modelsLocked ? undefined : resolved.model || undefined,
+    reasoningEffort: resolved.modelsLocked ? undefined : resolved.reasoningEffort || undefined,
   }
 }
 
@@ -238,7 +252,7 @@ export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runn
  */
 export function engineRunBody(
   resolved: ResolvedEngine,
-): Pick<CreateRunInput, 'runner' | 'model' | 'agentProfile'> {
+): Pick<CreateRunInput, 'runner' | 'model' | 'reasoningEffort' | 'agentProfile'> {
   return {
     ...engineBody(resolved),
     ...(resolved.account ? { agentProfile: resolved.account } : {}),
@@ -264,7 +278,7 @@ export function EnginePills({
   accounts?: boolean
 }) {
   const resolved = useResolvedEngine(pick)
-  const { runner, model, runners, canRun, modelsLocked } = resolved
+  const { runner, model, reasoningEffort, reasoningEfforts, runners, canRun, modelsLocked } = resolved
   const config = useConfig()
   // Under `auto` no catalog is fetched — the model pill is the launch-resolved row.
   const catalogRunner: Runner = runner === 'auto' ? (resolved.defaultRunner ?? runners[0] ?? 'claude') : runner
@@ -308,11 +322,12 @@ export function EnginePills({
             onChange(
               accounts
                 ? {
-                    runner: next,
-                    account: nextAccount,
-                    model: next === runner && next !== 'auto' ? pick.model : null,
-                  }
-                : { runner: next, account: null, model: null },
+                  runner: next,
+                  account: nextAccount,
+                  model: next === runner && next !== 'auto' ? pick.model : null,
+                  reasoningEffort: next === runner && next !== 'auto' ? pick.reasoningEffort ?? null : null,
+                }
+                : { runner: next, account: null, model: null, reasoningEffort: null },
             )
           }}
         />
@@ -327,9 +342,18 @@ export function EnginePills({
         disabled={unavailable}
         readOnly={modelsLocked === true}
         disabledHint={modelsLocked ? 'Model selection is locked to native coding-agent settings.' : undefined}
-        onPick={(next) => onChange({ ...pick, model: next })}
+        onPick={(next) => onChange({ ...pick, model: next, reasoningEffort: null })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
-        status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+        status={runner === 'auto' ? undefined : modelCatalogStatus(catalogRunner, catalog.data, catalog.isError)}
+      />
+      <ReasoningEffortPill
+        runner={catalogRunner}
+        model={model}
+        value={reasoningEffort}
+        options={reasoningEfforts}
+        disabled={unavailable}
+        modelsLocked={modelsLocked}
+        onPick={(next) => onChange({ ...pick, reasoningEffort: next || null })}
       />
     </>
   )

@@ -25,6 +25,7 @@ const UNKNOWN: TelemetryConsentPayload = {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/home/me/Projects/cezar',
@@ -33,7 +34,7 @@ const HEALTH: HealthResponse = {
   defaultRunner: 'claude',
   forge: null,
   capabilities: { localHandoff: true,
-  terminal: false, webTerminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  terminal: false, webTerminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const fetchMock = vi.fn<typeof fetch>()

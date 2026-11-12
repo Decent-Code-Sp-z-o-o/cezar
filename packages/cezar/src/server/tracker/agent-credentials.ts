@@ -5,7 +5,7 @@ import { TrackerConnections } from './connections.ts';
 import { createBacklogClient } from './backlog.ts';
 
 export class TrackerAgentBindingError extends Error {
-  constructor() { super('Tracker connection or scope changed. Create a new run from the current automation.'); }
+  constructor(message = 'Tracker connection or scope changed. Create a new run from the current automation.') { super(message); }
 }
 
 /** The run-record provenance a settled run carries: the same shape the contract and the store

@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton, SettingsSkeleton } from '@/components/loading-state'
 import {
   DEFAULT_PROMPT_TEMPLATES,
   makeTemplateId,
@@ -47,9 +48,9 @@ export function PromptTemplatesSection({ embedded = false }: { embedded?: boolea
 
   if (uiState.isPending) {
     return (
-      <p data-slot="prompt-templates-loading" className={embedded ? 'text-[13px] text-soft-foreground' : 'p-4 text-[13px] text-soft-foreground md:p-6'}>
-        Loading prompt templates…
-      </p>
+      <LoadingState label="Loading prompt templates…" data-slot="prompt-templates-loading">
+        {embedded ? <RowsSkeleton rows={3} /> : <SettingsSkeleton />}
+      </LoadingState>
     )
   }
   if (uiState.isError) {
@@ -138,7 +139,7 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
       >
         <div data-slot="prompt-template-list" className="flex flex-col gap-3">
           {templates.length === 0 ? (
-            <p data-slot="prompt-templates-empty" className="text-[13px] text-soft-foreground">
+            <p data-slot="prompt-templates-empty" className="text-ui text-soft-foreground">
               No templates. Add one below, or reset to the built-ins.
             </p>
           ) : (
@@ -175,7 +176,7 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
                   value={template.text}
                   maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
                   onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
-                  className="min-h-14 text-[13px]"
+                  className="min-h-14 text-ui"
                 />
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                   <TemplateSkillsPicker
@@ -195,7 +196,7 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
                       data-skill={name}
                       title={`Stop applying “${template.label}” automatically with ${name}`}
                       onClick={() => toggleTemplateSkill(template.id, name)}
-                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
                     >
                       {name}
                       <XIcon aria-hidden="true" className="size-3" />
@@ -226,7 +227,7 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
             value={newText}
             maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
             onChange={(event) => setNewText(event.target.value)}
-            className="min-h-14 text-[13px]"
+            className="min-h-14 text-ui"
           />
           <Button
             type="button"
@@ -264,7 +265,7 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
             Reset to defaults
           </Button>
           {invalid ? (
-            <p data-slot="prompt-templates-invalid" className="text-[11px] text-danger">
+            <p data-slot="prompt-templates-invalid" className="text-meta text-danger">
               Every template needs both a label and text.
             </p>
           ) : null}
@@ -400,7 +401,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-ui text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>

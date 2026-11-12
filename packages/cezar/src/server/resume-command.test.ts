@@ -23,6 +23,7 @@ describe('resumeCommand — session id validation', () => {
     expect(resumeCommand('opencode', id)).toBe(`opencode --session ${id}`);
     expect(resumeCommand('cursor', id)).toBe(`agent --resume ${id}`);
     expect(resumeCommand('pi', id)).toBe(`pi --session ${id}`);
+    expect(resumeCommand('antigravity', id)).toBe(`agy --conversation ${id}`);
     // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the last session; the
     // target is named by the separate `--session-id=<id>` flag, not a positional argument.
     expect(resumeCommand('junie', id)).toBe(`junie --resume --session-id=${id}`);
@@ -31,9 +32,9 @@ describe('resumeCommand — session id validation', () => {
   // Every runner id must map to a command — an id that fell through to the `claude` default
   // would hand the user a `claude --resume` for a session claude does not own (#387). Cursor is
   // excluded from the generic `${runner} ` check: its CLI binary is `agent`, not `cursor` (the
-  // specific assertion below covers it). Ollama is excluded too: an HTTP chat backend with no
+  // specific assertion above covers it). Ollama is excluded too: an HTTP chat backend with no
   // CLI that owns its sessions, so it fails closed to null instead.
-  it.each(RUNNER_IDS.filter((runner) => runner !== 'cursor' && runner !== 'ollama'))(
+  it.each(RUNNER_IDS.filter((runner) => runner !== 'cursor' && runner !== 'ollama' && runner !== 'antigravity'))(
     'maps %s to its own CLI, never silently to claude',
     (runner) => {
       const id = '9f8e7d6c-1234-4abc-9def-0123456789ab';

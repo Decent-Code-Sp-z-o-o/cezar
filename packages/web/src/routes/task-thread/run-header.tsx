@@ -8,6 +8,7 @@ import {
   ChevronsUpDownIcon,
   CircleStopIcon,
   CopyIcon,
+  FolderMinusIcon,
   EllipsisIcon,
   EllipsisVerticalIcon,
   MailIcon,
@@ -18,6 +19,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
+import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link } from '@/lib/project-router'
 
@@ -28,6 +30,7 @@ import {
   useReferenceProjectId,
   useRuns,
 } from '@/api/queries'
+import { useRunClaudeAccount } from '@/api/agent-accounts'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
@@ -53,8 +56,10 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
+import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
+import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
-import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
+import { ATTENTION_RANK, budgetStop, deriveAttention, runClosure, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import {
   formatCost,
@@ -69,16 +74,20 @@ import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
   isRunActive,
+  canRemoveTaskWorktree,
   resumeHint,
   runActionFlags,
 } from './run-actions'
 import { GitActions } from '../task-git/git-toolbar'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
+import { ImpactChip } from '../task-assets/impact-chip'
 import { RunConfirmDialog } from './run-confirm-dialog'
+import { TaskWorktreeRemovalDialog } from './task-worktree-removal'
 import { useRunEngine } from './run-engine'
 import { WorkflowSteps } from './step-rail'
 import { useDraft } from './thread-draft'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -195,6 +204,7 @@ function RunHeaderView({
         className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
       >
         <div className={cn('mx-auto w-full', !wide && 'max-w-[var(--measure)]')}>
+          <ManagerBackLink runId={run.id} />
           {/* `min-h-[30px]` is the git button's own height (Button size `sm`): the row keeps it
               whether or not a git step is on offer, so the header — and the thread under it —
               does not jump when the button appears or goes. */}
@@ -202,6 +212,7 @@ function RunHeaderView({
             <span data-slot="run-identity" className="flex min-w-0 flex-1 items-center gap-2.5">
               <EditableTitle run={run} />
               <RunProgress planTally={planTally} budget={budget} />
+              <ImpactChip run={run} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2.5">
               {/* The run's state, top right, beside the git button it decides. */}
@@ -333,7 +344,7 @@ function RunHeaderView({
 
           {run.steps.length > 0 ? (
             <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
-              <WorkflowSteps runId={run.id} steps={run.steps} />
+              <WorkflowSteps runId={run.id} steps={run.steps} closedAs={runClosure(run)} />
             </div>
           ) : null}
 
@@ -351,6 +362,10 @@ function RunHeaderView({
           onOpenChange={(open) => !open && actions.setConfirming(null)}
           onConfirm={(kind) => (kind === 'delete' ? actions.delete.mutate() : actions.cancel.mutate())}
         />
+        {actions.worktreeRemovalOpen ? (
+          <TaskWorktreeRemovalDialog key={run.id} run={run} pending={actions.removeWorktree.isPending}
+            onClose={() => actions.setWorktreeRemovalOpen(false)} onConfirm={() => actions.removeWorktree.mutate()} />
+        ) : null}
       </header>
     </ReferenceStatusProvider>
   )
@@ -386,7 +401,7 @@ function RunProgress({
         // The plan dock's compact mirror (spec: "mirrored as a compact progress line in the run
         // header"). Desktop only since #764: on a phone the dock it mirrors is itself on screen,
         // so the mirror would spend the tightest row here restating it.
-        <span data-slot="plan-mirror" className="hidden shrink-0 text-[11px] text-soft-foreground tabular-nums md:inline">
+        <span data-slot="plan-mirror" className="hidden shrink-0 text-meta text-soft-foreground tabular-nums md:inline">
           Plan {planTally.done}/{planTally.total}
         </span>
       ) : null}
@@ -490,7 +505,7 @@ function TaskItemActions({
       >
         <Trash2Icon aria-hidden="true" />
       </IconAction>
-      {moreStop || moreEnd ? (
+      {moreStop || moreEnd || canRemoveTaskWorktree(run) ? (
         <DropdownMenu>
           <IconTooltip label="More actions">
             <DropdownMenuTrigger asChild>
@@ -500,6 +515,11 @@ function TaskItemActions({
             </DropdownMenuTrigger>
           </IconTooltip>
           <DropdownMenuContent align="end" data-slot="run-more-menu">
+            {canRemoveTaskWorktree(run) ? (
+              <DropdownMenuItem disabled={actions.removeWorktree.isPending} onSelect={() => actions.setWorktreeRemovalOpen(true)}>
+                <FolderMinusIcon aria-hidden="true" /> Remove worktree…
+              </DropdownMenuItem>
+            ) : null}
             {moreEnd ? (
               <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
                 <CheckIcon aria-hidden="true" /> End session
@@ -589,8 +609,7 @@ function OpenInMenuForRun({
   const copyPath = () => {
     const path = run.worktreePath
     if (!path) return
-    void navigator.clipboard
-      .writeText(path)
+    void writeClipboard(path)
       .then(() => toast('Worktree path copied'))
       .catch(() => toast(`Path: ${path}`))
   }
@@ -661,12 +680,12 @@ function EditableTitle({ run }: { run: ApiRun }) {
   }, [draft.hasDraft, draft.ready, draft.text, editing])
 
   if (editor.editing) {
-    return <TitleEditInput editor={drafted} className="flex-1 text-[15px] font-semibold" />
+    return <TitleEditInput editor={drafted} className="flex-1 text-lead font-semibold" />
   }
 
   return (
     <span className="group flex min-w-0 items-center gap-1">
-      <h1 className="min-w-0 truncate text-[15px] font-semibold" title={run.task}>
+      <h1 className="min-w-0 truncate text-lead font-semibold" title={run.task}>
         {title}
       </h1>
       <button
@@ -695,12 +714,7 @@ function CopyBranchChip({ branch }: { branch: string }) {
   )
 
   const copy = () => {
-    if (!navigator.clipboard) {
-      toast(`Branch: ${branch}`)
-      return
-    }
-    void navigator.clipboard
-      .writeText(branch)
+    void writeClipboard(branch)
       .then(() => {
         setCopied(true)
         setTooltipOpen(true)
@@ -726,7 +740,7 @@ function CopyBranchChip({ branch }: { branch: string }) {
             <button
               type="button"
               data-slot="branch-chip"
-              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-meta font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
               aria-label={`Copy branch name ${branch}`}
               onClick={copy}
             >
@@ -804,7 +818,7 @@ function MetaRow({
         <Link
           key="automation"
           to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-meta font-medium hover:text-foreground"
         >
           Automation
         </Link>
@@ -813,7 +827,7 @@ function MetaRow({
           key="automation"
           data-slot="automation-origin"
           title="Automations are off on this server (CEZ_AUTOMATIONS)"
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-meta font-medium"
         >
           Automation
         </span>
@@ -919,6 +933,7 @@ function prChipNodes(run: ApiRun, references: ReturnType<typeof taskReferences>)
           references={prReferences}
           taskTitle={runTitle(run)}
           hidden={prReferences.length - 1}
+          conflictActionFor={(reference) => <ResolveConflictsButton run={run} prNumber={reference.number} />}
         />
       ) : null}
     </span>,
@@ -940,7 +955,10 @@ function RunUsage({
   continuationEngine?: ReactNode
   className?: string
 }) {
+  const showLiveUsage = useLiveUsageEnabled() && liveUsageParts(run.liveUsage).length > 0
+  const account = accountPart(useRunClaudeAccount(run, showLiveUsage))
   const usage: ReactNode[] = []
+  if (showLiveUsage) usage.push(<LiveUsage key="live" usage={run.liveUsage} account={account} />)
   if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
     usage.push(
       <DirectionalUsage
@@ -1200,7 +1218,7 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         </DropdownMenuTrigger>
       </IconTooltip>
       <DropdownMenuContent align="end" className="min-w-[9rem]">
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-meta font-normal text-muted-foreground">
           runner: {runner}
         </DropdownMenuLabel>
         {/* The auto request, kept next to the decision it produced (spec 2026-10-12-auto-provider-
@@ -1228,18 +1246,18 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         {account ? (
           <DropdownMenuLabel
             data-slot="agent-badge-account"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
+            className="font-mono text-meta font-normal text-muted-foreground"
           >
             account: {account}
           </DropdownMenuLabel>
         ) : null}
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-meta font-normal text-muted-foreground">
           model: {modelBadge}
         </DropdownMenuLabel>
         {identity ? (
           <DropdownMenuLabel
             data-slot="agent-badge-identity"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
+            className="font-mono text-meta font-normal text-muted-foreground"
           >
             identity: {identity}
           </DropdownMenuLabel>
@@ -1247,7 +1265,7 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         {continuationEngine ? (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="pb-1 text-[11px] font-normal text-muted-foreground">
+            <DropdownMenuLabel className="pb-1 text-meta font-normal text-muted-foreground">
               Next continuation
             </DropdownMenuLabel>
             <div
@@ -1389,6 +1407,11 @@ function ActionsKebab({
             {KEBAB_LABELS[command.id] ?? command.label}
           </DropdownMenuItem>
         ))}
+        {canRemoveTaskWorktree(run) ? (
+          <DropdownMenuItem disabled={actions.removeWorktree.isPending} onSelect={() => actions.setWorktreeRemovalOpen(true)}>
+            <FolderMinusIcon aria-hidden="true" /> Remove worktree…
+          </DropdownMenuItem>
+        ) : null}
         {stop || remove ? <DropdownMenuSeparator /> : null}
         {[stop, remove].map((command) =>
           command ? (
@@ -1422,7 +1445,7 @@ function ResumeHintLine({ hint }: { hint: string }) {
       data-slot="resume-hint"
       title="Copy the command"
       onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-meta text-soft-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">take over interactively: {hint}</span>

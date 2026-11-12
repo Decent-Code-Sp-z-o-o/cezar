@@ -8,6 +8,7 @@ import type { ConfigResponse, SetConfigInput } from '@open-mercato/cezar-api-cli
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { SettingsField } from './settings-field'
 import { WorktreesPanel } from './worktrees-panel'
 import { WorktreeLifecycleEditor } from './worktree-lifecycle-editor'
@@ -31,9 +32,7 @@ export function WorktreesSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="worktrees-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading worktree settings…
-      </p>
+      <LoadingState label="Loading worktree settings…" data-slot="worktrees-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {
@@ -121,11 +120,11 @@ function WorktreesForm({ config }: { config: ConfigResponse }) {
           </Button>
         </div>
         {retentionInvalid ? (
-          <p data-slot="resources-retention-invalid" className="text-[11px] text-danger">
+          <p data-slot="resources-retention-invalid" className="text-meta text-danger">
             Enter a whole number from {WORKTREE_RETENTION_MIN} to {WORKTREE_RETENTION_MAX} (0 = unlimited).
           </p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">
+          <p className="text-meta text-soft-foreground">
             {retentionNum === 0 ? 'Keeping every finished worktree.' : `Keeping the last ${retentionNum} finished worktree${retentionNum === 1 ? '' : 's'} on disk.`}
           </p>
         )}

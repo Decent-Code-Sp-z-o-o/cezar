@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
 import { runnerRequestSchema, runnerSchema } from './health.ts';
 import { stepSecretsSchema } from './secrets.ts';
 
@@ -28,6 +29,8 @@ export const workflowStepDefSchema = z
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
+    /** Per-step Codex reasoning level. The selected model advertises valid values. */
+    reasoningEffort: reasoningEffortSchema.optional(),
     /** Per-step agent backend override (falls back to the task / config default). `auto` asks
      *  cezar to pick the cheapest capable provider at the step's own launch (spec
      *  2026-10-12-auto-provider-selection). */

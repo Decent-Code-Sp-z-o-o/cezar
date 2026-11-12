@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEV_TELEMETRY_SERVICE, TELEMETRY_POLICY_VERSION, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, loadTelemetryConsent, scrub, setTelemetryConsent, stampedTelemetryService, registerTelemetryContext, reportError, sendDailyPing, telemetryBlockedBy, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
+import { DEV_TELEMETRY_SERVICE, TELEMETRY_POLICY_VERSION, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, loadTelemetryConsent, scrub, setTelemetryConsent, stampedTelemetryService, registerTelemetryContext, registerDailyInventory, recordTiming, reportError, sendDailyPing, telemetryBlockedBy, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
@@ -30,6 +30,33 @@ describe('telemetry', () => {
     expect(telemetryRuntime()).toBe('cli');
     vi.stubEnv('CEZ_DESKTOP', '1');
     expect(telemetryRuntime()).toBe('app');
+  });
+
+  it('sends timings as one batch to /track/timings, and nothing without consent', async () => {
+    recordTiming('manager_turn', 1200, { operation: 'user', target: 'claude' });
+    await flushTelemetry();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await optIn('cez-timings-');
+    recordTiming('manager_turn', 1200, { operation: 'user', target: 'claude' });
+    recordTiming('manager_action_decision', 999_999_999, { operation: 'merge', target: 'approve' });
+    recordTiming('manager_turn', 5, { operation: 'free text here', target: 'x' });
+    await flushTelemetry();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/track\/timings$/);
+    const body = JSON.parse(String(init.body));
+    expect(body.indexKey).toBeUndefined();
+    expect(body.timings).toEqual([
+      { name: 'manager_turn', durationMs: 1200, operation: 'user', target: 'claude', outcome: 'ok' },
+      { name: 'manager_action_decision', durationMs: 86_400_000, operation: 'merge', target: 'approve', outcome: 'ok' },
+    ]);
+
+    fetchMock.mockClear();
+    await setTelemetryConsent('denied');
+    recordTiming('manager_turn', 10, { operation: 'user', target: 'claude' });
+    await flushTelemetry();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('never sends from a test run unless forced', () => {
@@ -230,6 +257,36 @@ describe('telemetry', () => {
       const config = await loadWorkspaceConfig();
       expect(sent()[0]!.body.indexKey).toBe(config.cezarId);
       expect(config.lastActiveOn).toBe(new Date().toISOString().slice(0, 10));
+    });
+
+    it('follows cezar_run with one feature_inventory per configured feature, once a day', async () => {
+      await setTelemetryConsent('granted');
+      registerDailyInventory(async () => [{ label: 'automations_enabled', value: 2 }, { label: 'workflows_custom', value: 1 }]);
+      try {
+        await sendDailyPing();
+        await sendDailyPing();
+        await flushTelemetry();
+        const config = await loadWorkspaceConfig();
+        expect(sent().map((s) => [s.event, s.body.label, s.body.value, s.body.indexKey])).toEqual([
+          ['cezar_run', undefined, undefined, config.cezarId],
+          ['feature_inventory', 'automations_enabled', 2, config.cezarId],
+          ['feature_inventory', 'workflows_custom', 1, config.cezarId],
+        ]);
+      } finally {
+        registerDailyInventory(undefined);
+      }
+    });
+
+    it('still pings when the inventory fails', async () => {
+      await setTelemetryConsent('granted');
+      registerDailyInventory(() => Promise.reject(new Error('unreadable')));
+      try {
+        await sendDailyPing();
+        await flushTelemetry();
+        expect(sent().map((s) => s.event)).toEqual(['cezar_run']);
+      } finally {
+        registerDailyInventory(undefined);
+      }
     });
 
     it('lets CEZ_TELEMETRY=0 and DO_NOT_TRACK=1 override a yes', async () => {

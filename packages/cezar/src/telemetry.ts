@@ -293,6 +293,42 @@ export function track(
   );
 }
 
+/** A duration, not an event (tracking guide: "durations are timings"): buffered raw and sent to
+ *  `/track/timings` every 15 s. No `indexKey` — timings have none. */
+export interface TimingFields {
+  operation?: string;
+  target?: string;
+  outcome?: 'ok' | 'error' | 'timeout';
+}
+const TIMING_FLUSH_MS = 15_000;
+const TIMING_MAX_MS = 86_400_000;
+const TIMING_FIELD = /^[\w.:@/+-]{0,64}$/;
+let timings: Array<{ name: string; durationMs: number; operation: string; target: string; outcome: string }> = [];
+let timingTimer: NodeJS.Timeout | undefined;
+
+export function recordTiming(name: string, durationMs: number, fields: TimingFields = {}): void {
+  if (!telemetryEnabled()) return;
+  if (!/^[a-z][a-z0-9_]{0,47}$/.test(name) || !Number.isFinite(durationMs)) return;
+  const operation = fields.operation ?? '';
+  const target = fields.target ?? '';
+  if (!TIMING_FIELD.test(operation) || !TIMING_FIELD.test(target)) return;
+  timings.push({ name, durationMs: Math.min(Math.max(durationMs, 0), TIMING_MAX_MS), operation, target, outcome: fields.outcome ?? 'ok' });
+  if (timings.length >= 1000) flushTimings();
+  else if (!timingTimer) {
+    timingTimer = setTimeout(flushTimings, TIMING_FLUSH_MS);
+    timingTimer.unref?.();
+  }
+}
+
+function flushTimings(): void {
+  if (timingTimer) clearTimeout(timingTimer);
+  timingTimer = undefined;
+  if (timings.length === 0) return;
+  const batch = timings;
+  timings = [];
+  inFlight(stillGranted().then((ok) => ok && post('/track/timings', { service: SERVICE, version, runtime: telemetryRuntime(), timings: batch })));
+}
+
 /** The fields every event carries, for `cezar telemetry inspect` — the same object `track` builds. */
 export function telemetryEnvelope(): Record<string, string> {
   return { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime() };
@@ -309,19 +345,37 @@ export const TELEMETRY_EVENTS = [
   'attachments_sent', 'attachments_restaged', 'palette_opened', 'task_command_run', 'task_shortcut_used',
   'task_switched', 'palette_mode_used', 'palette_dismissed', 'shortcut_rebound',
   'schedule_menu_opened', 'start_option_picked', 'task_scheduled',
+  'task_origin', 'workflow_used', 'skill_used', 'variants_started', 'dispatch_tree_started',
+  'automation_created', 'automation_toggled', 'automation_deleted', 'automation_fired',
+  'workflow_saved', 'pr_opened', 'review_decided', 'design_mode_enabled', 'feature_inventory',
+  'manager_mode_opened', 'manager_created', 'manager_deleted', 'manager_settings_changed',
+  'manager_chat_opened', 'manager_message_sent', 'manager_turn_completed', 'manager_task_started',
+  'manager_action_proposed', 'manager_action_decided', 'manager_question_answered',
+  'manager_notification_clicked',
 ] as const;
 
-/** Once per UTC day while telemetry is on: `cezar_run`. Without consent: nothing at all. */
+/** The daily `feature_inventory` rows (feature-telemetry.ts), registered by the server boot so
+ *  this module stays free of the workspace readers. */
+let inventory: (() => Promise<Array<{ label: string; value: number }>>) | undefined;
+export function registerDailyInventory(collect: typeof inventory): void {
+  inventory = collect;
+}
+
+/** Once per UTC day while telemetry is on: `cezar_run`, then one `feature_inventory` per configured
+ *  feature. Without consent: nothing at all. */
 export async function sendDailyPing(): Promise<void> {
   if (!(await stillGranted())) return;
   const today = new Date().toISOString().slice(0, 10);
   if ((await loadWorkspaceConfig()).lastActiveOn === today) return;
   const base = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime() };
-  const ok = await post('/track/cezar_run', { ...base, indexKey: await cezarId() });
+  const indexKey = await cezarId();
+  const ok = await post('/track/cezar_run', { ...base, indexKey });
   if (ok) {
     await mergeWriteWorkspaceConfig((config) => {
       config.lastActiveOn = today;
     }).catch(() => undefined);
+    const rows = await inventory?.().catch(() => []) ?? [];
+    for (const row of rows) void post('/track/feature_inventory', { ...base, label: row.label, value: row.value, indexKey });
   }
 }
 
@@ -477,6 +531,7 @@ export function reportError(
 
 /** Wait (bounded) for in-flight sends — used at shutdown so `app_stop` gets out. */
 export async function flushTelemetry(maxMs = 1_500): Promise<void> {
+  flushTimings();
   if (pending.size === 0) return;
   await Promise.race([
     Promise.allSettled([...pending]),

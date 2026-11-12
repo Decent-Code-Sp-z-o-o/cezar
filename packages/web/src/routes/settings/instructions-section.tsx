@@ -7,6 +7,7 @@ import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { PromptTemplatesSection } from './prompt-templates-section'
 import { SettingsField } from './settings-field'
 import { useConfigSave } from './use-config-save'
@@ -32,9 +33,7 @@ export function InstructionsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="instructions-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading instructions…
-      </p>
+      <LoadingState label="Loading instructions…" data-slot="instructions-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {
@@ -81,7 +80,7 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
     >
       <SettingsField
         title="System prompt"
-        hint="Read by every agent step of every new task, whichever runner executes it. This is the only place it is edited."
+        hint="Read by every agent step of every new task in this project, whichever runner executes it. Added after the global instructions (General settings → Instructions) and takes precedence over them."
       >
         <Textarea
           aria-label="System prompt"
@@ -107,7 +106,7 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
               {trimmedPrompt.length.toLocaleString('en-US')} characters — the limit is {SYSTEM_PROMPT_MAX.toLocaleString('en-US')}.
             </p>
           ) : (
-            <p className="text-[11px] text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
+            <p className="text-meta text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
           )}
         </div>
       </SettingsField>
@@ -141,7 +140,7 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
               {BRANCH_NAMING_MAX.toLocaleString('en-US')}.
             </p>
           ) : (
-            <p className="text-[11px] text-soft-foreground">
+            <p className="text-meta text-soft-foreground">
               Leave empty for the default names. A new task waits for its name before it forks.
             </p>
           )}

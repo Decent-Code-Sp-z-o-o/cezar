@@ -54,8 +54,10 @@ const RULES: Rule[] = [
     // (`&#8203;`) and longer hashes, and comment stripping removes issue refs like `#402`.
     pattern: /(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g,
     applies: styleSources,
+    // A `theme-color` meta takes a literal, not a var(); brand-asset.test.ts pins theme.ts to the sheet.
     allowed: (rel) =>
       rel === 'src/styles/index.css' ||
+      rel === 'src/lib/theme.ts' ||
       // The terminal's xterm canvas cannot resolve CSS custom properties — ITheme wants
       // concrete color strings — and the surface deliberately stays dark in both appearance
       // modes (ANSI colors assume it), so its four constants live beside their only consumer.
@@ -112,6 +114,32 @@ const RULES: Rule[] = [
     name: 'no-100vh',
     why: 'viewport height is 100dvh/h-dvh — 100vh ignores mobile browser chrome (iOS rule)',
     pattern: /\b(?:(?:h|min-h|max-h)-screen|100vh)\b/g,
+    applies: styleSources,
+  },
+  {
+    name: 'no-arbitrary-type-sizes',
+    why: 'text sizes come from the scale in src/styles/index.css (text-micro/meta/label/ui/body/lead, plus text-xs/sm/base…) — a text-[12.5px] is a seventh step nobody else uses (typography audit 2026-10-30); anything under 10px is drawing, not type, and stays free',
+    pattern: /\btext-\[(?:[1-9]\d(?:\.\d+)?)px\]/g,
+    applies: styleSources,
+    // The fork's own surfaces keep their deliberate sizes: the web terminal's xterm chrome, the
+    // agent badge and the rich file previews (fork features upstream does not ship), plus the
+    // composer-limit notes and the quick-list badge the fork styled before the audit existed.
+    allowed: (rel) =>
+      rel === 'src/styles/index.css' ||
+      rel === 'src/routes/terminal/terminal.tsx' ||
+      rel === 'src/routes/terminal/terminal-loading.tsx' ||
+      rel === 'src/routes/task-thread/run-header.tsx' ||
+      rel === 'src/routes/task-git/file-preview.tsx' ||
+      rel === 'src/components/diff/image-preview.tsx' ||
+      rel === 'src/components/task-quick-list.tsx' ||
+      rel === 'src/routes/settings/instructions-section.tsx' ||
+      rel === 'src/routes/settings/resources-section.tsx',
+  },
+  {
+    name: 'no-ad-hoc-eyebrow',
+    why: 'small capitals over a section, column or card are the `eyebrow` utility (one size, weight and tracking), not a hand-rolled uppercase + tracking pair',
+    // `uppercase` and a `tracking-*` in the same class string, either order.
+    pattern: /\btracking-(?:\[[^\]]+\]|wide|wider|widest)\b[^"'`\n]*\buppercase\b|\buppercase\b[^"'`\n]*\btracking-(?:\[[^\]]+\]|wide|wider|widest)\b/g,
     applies: styleSources,
   },
 ]

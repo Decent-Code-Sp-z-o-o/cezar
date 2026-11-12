@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { childSettleReport } from '../dispatch/engine.ts';
+import { taskAttention } from '../managers/snapshot.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -54,6 +56,7 @@ describe('graph system nodes', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     manager.dispose();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
@@ -127,6 +130,21 @@ describe('graph system nodes', () => {
     manager.sendMessage(id, [{ type: 'text', text: 'Reject — tests are flaky' }]);
     await until(id, terminal);
     expect(readFileSync(join(repoRoot, 'gate.txt'), 'utf8')).toBe('rejected: Reject — tests are flaky\n');
+  }, 30_000);
+
+  it('dispatched gate Finish reports success with webhooks unset', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', undefined);
+    const id = manager.startRun(def(GATE), {
+      task: 'x', worktree: false,
+      dispatch: { rootRunId: 'root-test', parentRunId: 'root-test' },
+    }).id;
+    const parked = await until(id, parkedAt('gate'));
+    expect(parked.attentionRequest?.questions[0]?.question).toBe('Ship x?');
+    expect(manager.finish(id)).toBe(true);
+    const finished = await until(id, terminal);
+    expect(['done', 'review']).toContain(finished.status);
+    expect(childSettleReport(finished).report.status).toBe('done');
+    expect(finished.dispatch?.pendingAsk).toBeUndefined();
   }, 30_000);
 
   it('Finish at a gate settles the run without running what follows; cancel cancels it', async () => {
@@ -211,27 +229,60 @@ describe('graph system nodes', () => {
     expect(readFileSync(join(repoRoot, 'answer.txt'), 'utf8')).toBe('luxon\n');
   }, 30_000);
 
+  it('a manager hears about each gate and ask-user node once, through the real parks', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'ask', type: 'ask-user', question: 'Which library?', options: ['date-fns', 'luxon'] },
+        { id: 'gate', type: 'gate.human', message: 'Ship?' },
+        { id: 'done', type: 'check', command: 'true' },
+      ],
+      edges: [
+        { from: 'start', to: 'ask' },
+        { from: 'ask', to: 'gate' },
+        { from: 'gate.approve', to: 'done' },
+      ],
+    };
+    const id = manager.startRun(def(graph), { task: 'x', worktree: false }).id;
+    const asked = taskAttention('p', [await until(id, parkedAt('ask'))], Date.now());
+    expect(asked).toMatchObject([{ kind: 'task-needs-you', runId: id, detail: 'Which library?' }]);
+    expect(taskAttention('p', [store.getRun(id)!], Date.now())[0]?.key).toBe(asked[0]?.key);
+
+    manager.sendMessage(id, [{ type: 'text', text: 'luxon' }]);
+    const gated = taskAttention('p', [await until(id, parkedAt('gate'))], Date.now());
+    expect(gated).toMatchObject([{ kind: 'task-needs-you', runId: id }]);
+    expect(gated[0]?.key).not.toBe(asked[0]?.key);
+
+    manager.sendMessage(id, [{ type: 'text', text: 'Approve' }]);
+    await until(id, terminal);
+  }, 30_000);
+
   it('git.commit commits the agent work with the rendered message, then reports nothing', async () => {
     const graph: WorkflowGraph = {
       nodes: [
         { id: 'start', type: 'start' },
+        { id: 'artifact', type: 'check', command: 'echo verification-residue > check-output.txt' },
         { id: 'work', type: 'agent', prompt: '{{task}}' },
         { id: 'commit', type: 'git.commit', message: 'feat: {{task}}' },
         { id: 'again', type: 'git.commit', message: 'nothing left' },
         { id: 'log', type: 'check', command: 'echo "{{nodes.commit.sha}}" > sha.txt' },
       ],
       edges: [
-        { from: 'start', to: 'work' },
+        { from: 'start', to: 'artifact' },
+        { from: 'artifact', to: 'work' },
         { from: 'work', to: 'commit' },
         { from: 'commit.done', to: 'again' },
         { from: 'again.nothing', to: 'log' },
       ],
     };
-    const id = manager.startRun(def(graph), { task: 'add notes', worktree: false }).id;
+    const id = manager.startRun(def(graph), { task: 'add notes mock:done', worktree: true }).id;
     const final = await until(id, terminal);
     expect(final.status).not.toBe('failed');
-    const { stdout } = await run('git', ['log', '-1', '--format=%H %s'], { cwd: repoRoot });
-    expect(stdout.trim()).toBe(`${readFileSync(join(repoRoot, 'sha.txt'), 'utf8').trim()} feat: add notes`);
+    const { stdout } = await run('git', ['log', '-1', '--format=%H %s'], { cwd: final.worktreePath });
+    expect(stdout.trim()).toBe(`${readFileSync(join(final.worktreePath!, 'sha.txt'), 'utf8').trim()} feat: add notes mock:done`);
+    expect(readFileSync(join(final.worktreePath!, 'check-output.txt'), 'utf8')).toBe('verification-residue\n');
+    const { stdout: committedFiles } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: final.worktreePath });
+    expect(committedFiles).not.toContain('check-output.txt');
   }, 30_000);
 
   it('draft PR → PR comment → wait for CI, faked under CEZ_DRY_RUN', async () => {

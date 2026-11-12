@@ -31,6 +31,7 @@ interface HealthBody {
     automations: boolean;
     dispatch: boolean;
     tokenMetrics: boolean;
+    webhooks: boolean;
     tokenUsageMetrics: boolean;
     costMetrics: boolean;
   };
@@ -117,10 +118,13 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       designMode: true,
       followups: false,
       singleProject: false,
+      automations: true,
+      managers: true,
+      managerSystemNotifications: expect.any(Boolean),
       dispatch: true,
       webTerminal: false,
-      automations: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -175,10 +179,13 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       designMode: false,
       followups: false,
       singleProject: false,
+      automations: true,
+      managers: true,
+      managerSystemNotifications: expect.any(Boolean),
       dispatch: true,
       webTerminal: false,
-      automations: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -207,10 +214,13 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       designMode: false,
       followups: false,
       singleProject: false,
+      automations: true,
+      managers: true,
+      managerSystemNotifications: expect.any(Boolean),
       dispatch: true,
       webTerminal: false,
-      automations: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -224,10 +234,13 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       designMode: true,
       followups: false,
       singleProject: false,
+      automations: true,
+      managers: true,
+      managerSystemNotifications: expect.any(Boolean),
       dispatch: true,
       webTerminal: false,
-      automations: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -246,10 +259,13 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       designMode: true,
       followups: true,
       singleProject: false,
+      automations: true,
+      managers: true,
+      managerSystemNotifications: expect.any(Boolean),
       dispatch: true,
       webTerminal: false,
-      automations: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -274,10 +290,13 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       designMode: true,
       followups: false,
       singleProject: false,
+      automations: true,
+      managers: true,
+      managerSystemNotifications: expect.any(Boolean),
       dispatch: true,
       webTerminal: false,
-      automations: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -291,10 +310,13 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       designMode: true,
       followups: false,
       singleProject: false,
+      automations: true,
+      managers: true,
+      managerSystemNotifications: expect.any(Boolean),
       dispatch: true,
       webTerminal: false,
-      automations: true,
       tokenMetrics: false,
+      webhooks: false,
       tokenUsageMetrics: false,
       costMetrics: false,
     });
@@ -304,6 +326,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_HIDE_TOKEN_USAGE = '1';
     expect((await health()).capabilities).toMatchObject({
       tokenMetrics: false,
+      webhooks: false,
       tokenUsageMetrics: false,
       costMetrics: true,
     });
@@ -311,6 +334,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_HIDE_COST = '1';
     expect((await health()).capabilities).toMatchObject({
       tokenMetrics: false,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: false,
     });

@@ -177,6 +177,22 @@ describe('useRunHistory', () => {
     expect(result.current.hasOlder).toBe(false)
   })
 
+  it('flags a fallback replay the server truncated, so the thread does not claim the complete session (#882)', async () => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    mockHistory.mockRejectedValue(new Error('old server'))
+    mockContext.mockResolvedValue(context())
+    const { wrapper } = harness()
+    const { result } = renderHook(() => useRunHistory('run-1'), { wrapper })
+
+    await waitFor(() => expect(result.current.fallback).toBe(true), { timeout: 3_000 })
+    expect(result.current.fallbackTruncated).toBe(false)
+    await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toBe('/api/v1/runs/run-1/events'))
+    act(() => FakeEventSource.instances.at(-1)!.emit('history-truncated', '{"firstSeq":400,"afterSeq":0}'))
+    await waitFor(() => expect(result.current.fallbackTruncated).toBe(true))
+    vi.unstubAllGlobals()
+  })
+
   it('keeps the optimized stream after an older-page failure so the retry remains available', async () => {
     mockHistory.mockImplementation(async (_id, cursor) => {
       if (cursor === 'older-100') throw new Error('older page unavailable')
@@ -288,6 +304,58 @@ describe('useRunHistory', () => {
     first.unmount()
     renderHook(() => useRunHistory('run-1'), { wrapper })
     expect(FakeEventSource.instances.at(-1)?.url).toBe('/api/v1/runs/run-1/events?cursor=live-100&afterSeq=100')
+  })
+
+  it('leaves no gap after a refetch rebuilds the window forward and the tail is evicted (#2018)', async () => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    // A two-event-per-page server that, like the pre-fix one, stamps every page with the file
+    // high-water mark — the claim the client must not trust from a non-newest page.
+    let highWater = 6
+    const slice = (from: number, to: number, extras: Partial<RunHistoryPage>): RunHistoryPage => ({
+      events: Array.from({ length: to - from + 1 }, (_, index) => page(from + index).events[0]!),
+      itemCount: to - from + 1,
+      liveCursor: `live-${highWater}`,
+      asOfSeq: highWater,
+      hasOlder: from > 1,
+      ...(from > 1 ? { olderCursor: `older-${from}` } : {}),
+      ...extras,
+    })
+    mockHistory.mockImplementation(async (_id, cursor) => {
+      if (cursor === undefined) return slice(highWater - 1, highWater, {})
+      const [direction, boundary] = cursor.split('-') as [string, string]
+      const at = Number(boundary)
+      if (direction === 'older') return slice(at - 2, at - 1, { newerCursor: `newer-${at - 1}` })
+      const to = Math.min(at + 2, highWater)
+      return slice(at + 1, to, to < highWater ? { newerCursor: `newer-${to}` } : {})
+    })
+    mockContext.mockResolvedValue(context())
+    const { client, wrapper } = harness()
+    const first = renderHook(() => useRunHistory('run-1'), { wrapper })
+    await waitFor(() => expect(first.result.current.visibleEvents.map(({ seq }) => seq)).toEqual([5, 6]))
+    await act(() => first.result.current.loadOlder())
+    await waitFor(() => expect(first.result.current.visibleEvents.map(({ seq }) => seq)).toEqual([3, 4, 5, 6]))
+
+    highWater = 12
+    await act(() => client.invalidateQueries({ queryKey: ['run-history'] }))
+    first.unmount()
+    client.removeQueries({ queryKey: ['run-history-tail'] })
+    const rendered: number[][] = []
+    const second = renderHook(() => {
+      const state = useRunHistory('run-1')
+      rendered.push(state.visibleEvents.map(({ seq }) => seq))
+      return state
+    }, { wrapper })
+
+    await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toContain('afterSeq=12'))
+    await waitFor(() => {
+      const seqs = second.result.current.visibleEvents.map(({ seq }) => seq)
+      expect(seqs.at(-1)).toBe(12)
+      expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, index) => seqs[0]! + index))
+    })
+    // The stale forward-rebuilt window is never painted while the newest page reloads.
+    expect(rendered.filter((seqs) => seqs.length > 0 && seqs.at(-1) !== 12)).toEqual([])
+    vi.unstubAllGlobals()
   })
 
   it('does not let an older task request patch the current task cache', async () => {
@@ -427,6 +495,9 @@ describe('useRunHistory', () => {
     expect(result.current.visibleEvents.some(({ seq, type }) => seq === 301 && type === 'item.delta')).toBe(true)
     expect(result.current.retainedPages).toBe(1)
     expect(FakeEventSource.instances).toHaveLength(1)
+    // A settled compaction read is never aborted afterwards: only foreign code still watching
+    // the signal would see that abort, as an unhandled AbortError (a4d1471e).
+    expect(mockHistory.mock.calls[1]?.[2]?.signal?.aborted).toBe(false)
     vi.unstubAllGlobals()
   })
 

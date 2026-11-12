@@ -20,6 +20,7 @@ import {
 afterEach(resetDraft)
 
 const EMPTY_DRAFT = {
+  reasoningEffort: null,
   text: '',
   source: null,
   runner: null,
@@ -124,6 +125,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: null,
+      reasoningEffort: null,
       variants: 1,
       worktree: null,
       autonomous: null,
@@ -139,6 +141,7 @@ describe('the new-task draft store', () => {
       runner: 'codex',
       agentProfile: null,
       model: 'gpt-5-codex',
+      reasoningEffort: 'high',
       variants: 2,
       worktree: false,
       autonomous: null,
@@ -149,6 +152,7 @@ describe('the new-task draft store', () => {
     expect(first.text).toBe('fix it')
     expect(first.worktree).toBe(false)
     expect(first.generateFollowups).toBe(false)
+    expect(first.reasoningEffort).toBe('high')
     first.text = 'mutated'
     expect(readDraft().text).toBe('fix it')
   })
@@ -173,6 +177,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: 'opus',
+      reasoningEffort: null,
       variants: 3,
       worktree: null,
       autonomous: null,
@@ -188,6 +193,7 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       // Runner/model/variants are a way of working — they survive, as they always did.
       model: 'opus',
+      reasoningEffort: null,
       variants: 3,
       worktree: null,
       autonomous: null,
@@ -203,6 +209,7 @@ describe('the new-task draft store', () => {
       runner: 'claude',
       agentProfile: null,
       model: 'sonnet',
+      reasoningEffort: null,
       variants: 2,
       worktree: false,
       autonomous: null,
@@ -232,6 +239,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: null,
+      reasoningEffort: null,
       variants: 1,
       worktree: null,
       autonomous: null,
@@ -247,6 +255,7 @@ describe('the new-task draft store', () => {
       runner: null,
       agentProfile: null,
       model: null,
+      reasoningEffort: null,
       variants: 1,
       worktree: null,
       autonomous: null,

@@ -1147,6 +1147,8 @@ describe('TasksOverview — mobile cards and FAB', () => {
     const fab = document.querySelector('[data-slot="new-task-fab"]')
     expect(fab?.getAttribute('href')).toBe('/new')
     expect(fab?.getAttribute('aria-label')).toBe('New task')
+    // Fixed to the viewport, so it has to clear the phone bottom bar itself.
+    expect(fab?.className).toContain('var(--phone-bar,0px)')
   })
 })
 
@@ -1383,6 +1385,46 @@ describe('dispatched subtasks nest under their parent', () => {
   const depthOf = (id: string) => tableRow(id)?.getAttribute('data-depth')
   const toggleOf = (el: Element | null) =>
     el?.querySelector<HTMLButtonElement>('[data-slot="subtask-toggle"]') ?? null
+
+  it('gives a nested title the room its chips and hidden actions would take (#979)', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'a', createdAt: ago(30_000) }),
+        run({ id: 'b', createdAt: ago(20_000), dispatch: { rootRunId: 'a', parentRunId: 'a', kind: 'implement' } }),
+        run({ id: 'c', createdAt: ago(10_000), dispatch: { rootRunId: 'a', parentRunId: 'b' } }),
+      ],
+    })
+    fireEvent.click(toggleOf(tableRow('a')) as HTMLButtonElement)
+    const child = tableRow('b') as HTMLElement
+    // jsdom has no layout: these classes are the contract, measured in Chromium on the PR.
+    expect(child.querySelector('[data-slot="row-actions"]')?.className).toContain('w-0')
+    expect(child.querySelector('[data-slot="dispatch-kind"]')?.className).toContain('@max-[300px]:hidden')
+    const toggle = toggleOf(child) as HTMLButtonElement
+    expect(toggle.querySelector('span')?.className).toContain('@max-[260px]:hidden')
+    // Compacting is visual only: the name still says what the handle unfolds.
+    expect(toggle.textContent).toBe('1 subtask')
+    expect(toggle.getAttribute('aria-label')).toBe('Expand 1 subtask')
+  })
+
+  it('keeps the actions of a pinned row laid out (#979)', () => {
+    renderOverview({ runs: [run({ id: 'a', createdAt: ago(30_000), pinned: true })] })
+    expect(tableRow('a')?.querySelector('[data-slot="row-actions"]')?.className).not.toContain('w-0')
+  })
+
+  it('widens the Task cell floor by the indent so a nested title keeps its room (#979)', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'a', createdAt: ago(30_000) }),
+        run({ id: 'b', createdAt: ago(20_000), dispatch: { rootRunId: 'a', parentRunId: 'a' } }),
+        run({ id: 'c', createdAt: ago(10_000), dispatch: { rootRunId: 'a', parentRunId: 'b' } }),
+      ],
+    })
+    fireEvent.click(toggleOf(tableRow('a')) as HTMLButtonElement)
+    fireEvent.click(toggleOf(tableRow('b')) as HTMLButtonElement)
+    const floor = (id: string) =>
+      (tableRow(id)?.querySelector('td[data-column-id="task"]') as HTMLElement).style.minWidth
+    expect([floor('a'), floor('b'), floor('c')]).toEqual(['220px', '234px', '248px'])
+  })
 
   it('folds a child behind its parent by default; the chip unfolds it in the parent’s place', () => {
     renderOverview({

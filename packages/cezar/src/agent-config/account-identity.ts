@@ -56,6 +56,10 @@ const UNSUPPORTED_IDENTITY_REASON: Record<Exclude<ProviderId, 'claude' | 'codex'
   junie: 'cezar does not yet read Junie account details from its config folder.',
   copilot: 'cezar does not yet read Copilot account details from its config folder.',
   ollama: 'Ollama keeps no account — the local server has a single anonymous identity.',
+  omp: 'cezar does not yet read OMP account details from its agent dir (agent.db is its login store).',
+  antigravity: 'Antigravity keeps its Google sign-in in its own store, so cezar cannot read it.',
+  gemini: 'cezar does not yet read Gemini CLI account details from its config folder.',
+  kimi: 'cezar does not yet read Kimi Code account details from its config folder.',
 };
 
 /** Read a JSON file under the cap. `null` for absent, unreadable, oversized or malformed. */

@@ -3,6 +3,7 @@ import { useState } from 'react'
 
 import { useRunFile } from '@/api/queries'
 import { cn } from '@/lib/utils'
+import { LoadingState, TreeSkeleton } from '@/components/loading-state'
 
 import { formatFileSize, isImagePath } from './worktree-files'
 
@@ -23,7 +24,7 @@ export function FilesTree({
   onSelect: (path: string) => void
 }) {
   return (
-    <nav data-slot="files-tree" aria-label="Worktree files" className="min-w-0 text-[13px]">
+    <nav data-slot="files-tree" aria-label="Worktree files" className="min-w-0 text-ui">
       <ul className="flex flex-col gap-px">
         <DirChildren runId={runId} path="" depth={0} selected={selected} onSelect={onSelect} />
       </ul>
@@ -49,9 +50,9 @@ function DirChildren({
 
   if (entry.isPending) {
     return (
-      <li data-slot="files-tree-loading" className="px-1.5 py-1 text-xs text-soft-foreground" style={{ paddingLeft: `${24 + depth * 14}px` }}>
-        Loading…
-      </li>
+      <LoadingState as="li" label="Loading folder…" data-slot="files-tree-loading">
+        <TreeSkeleton rows={2} indent={24 + depth * 14} />
+      </LoadingState>
     )
   }
   if (entry.isError) {
@@ -178,7 +179,7 @@ function FileNode({
         <Icon aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{name}</span>
         {size !== undefined ? (
-          <span className="ml-auto shrink-0 pl-2 font-mono text-[11px] tabular-nums text-soft-foreground">
+          <span className="ml-auto shrink-0 pl-2 font-mono text-meta tabular-nums text-soft-foreground">
             {formatFileSize(size)}
           </span>
         ) : null}

@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  WebhookIcon,
   BookmarkIcon,
   BotIcon,
   FileCogIcon,
@@ -16,6 +17,7 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
+  ArrowLeftRightIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -24,8 +26,10 @@ import { AccountsSection } from './accounts-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
+import { GlobalInstructionsSection } from './global-instructions-section'
 import { InstructionsSection } from './instructions-section'
 import { KeyboardSection } from './keyboard-section'
+import { ManagerSection } from './manager-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
 import { PrivacySection } from './privacy-section'
@@ -33,9 +37,11 @@ import { ProjectsSection } from './projects-section'
 import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
 import { TasksSection } from './tasks-section'
+import { TransferSection } from './transfer-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
+import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
 
 /**
@@ -61,17 +67,21 @@ export type SettingsSectionId =
   | 'agents'
   | 'agent-config'
   | 'instructions'
+  | 'global-instructions'
   | 'tasks'
   | 'resources'
   | 'worktrees'
   | 'projects'
   | 'notifications'
+  | 'manager'
   | 'keyboard'
   | 'skills'
   | 'tracker'
   | 'secrets'
   | 'integrations'
+  | 'webhooks'
   | 'workspace-secrets'
+  | 'transfer'
   | 'privacy'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
@@ -106,6 +116,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
     icon: KeyRoundIcon,
     component: ProjectSecretsSection,
+    scope: 'project',
+  },
+  {
+    id: 'webhooks',
+    title: 'Webhooks',
+    description: 'Send task updates to Slack, Discord or your own endpoint.',
+    icon: WebhookIcon,
+    component: WebhooksSection,
     scope: 'project',
   },
   {
@@ -182,6 +200,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'manager',
+    title: 'Manager',
+    description: 'Which approvals ask you to confirm first.',
+    icon: BotIcon,
+    component: ManagerSection,
+    scope: 'global',
+  },
+  {
     id: 'keyboard',
     title: 'Keyboard',
     description: 'Shortcuts for task commands.',
@@ -203,6 +229,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Updates for skills installed on this machine.',
     icon: PackageCheckIcon,
     component: SkillsSection,
+    scope: 'global',
+  },
+  {
+    id: 'global-instructions',
+    title: 'Instructions',
+    description: 'A system prompt for every task in every project; a project’s own wins where they conflict.',
+    icon: MessageSquareTextIcon,
+    component: GlobalInstructionsSection,
     scope: 'global',
   },
   {
@@ -230,6 +264,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'transfer',
+    title: 'Transfer',
+    description: 'Export this machine’s configuration to a file, or import one from another cezar.',
+    icon: ArrowLeftRightIcon,
+    component: TransferSection,
+    scope: 'global',
+  },
+  {
     id: 'privacy',
     title: 'Privacy',
     description: 'Whether cezar shares usage data with its maintainers. Off unless you turn it on.',
@@ -246,23 +288,27 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'managers'>>,
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      // Routed until health answers: a reload here must not fall into the legacy redirect.
+      !(capabilities !== undefined && capabilities.managers !== true && section.id === 'manager'),
   )
 }
 
 /** Both areas at once — what the unified nav (spec 2026-10-13-unified-settings) renders: the
  *  global sections as flat rows, the project sections under every project in the tree. */
 export function settingsSectionsByScope(
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'managers'>>,
 ): Record<SettingsScope, SettingsSection[]> {
   return {
-    global: visibleSettingsSections('global', capabilities),
+    // The nav never lists Manager on a guess, unlike the route table above.
+    global: visibleSettingsSections('global', capabilities)
+      .filter((section) => section.id !== 'manager' || capabilities?.managers === true),
     project: visibleSettingsSections('project', capabilities),
   }
 }

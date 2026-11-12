@@ -1,5 +1,6 @@
 import { SearchIcon } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Virtualizer } from 'virtua'
 
 import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
 import {
@@ -22,6 +23,12 @@ import { AUTO_RUNNER, RUNNERS, type ComposerRunner } from '@/routes/new-task-for
 import { chipChevron as chevron, chipClass } from '@/components/chip'
 
 export { chevron, chipClass }
+
+/** Searchable lists past this many rows go through virtua — a repo can carry thousands of branches. */
+export const PICKER_VIRTUALIZE_THRESHOLD = 100
+
+/** Lists longer than this get a filter box even without `searchPlaceholder`. */
+export const PICKER_SEARCH_THRESHOLD = 15
 
 /** A generic single-choice pill (runner / model / variants): DropdownMenu radio semantics,
  *  two-line items (label + quiet description), disabled state carries its reason as `title`. */
@@ -53,22 +60,29 @@ export function PickerPill({
   disabledHint?: string
   /** Quiet non-selectable catalog state, kept inside the menu's accessible reading order. */
   status?: string
-  /** Add a name filter above longer option catalogs. */
+  /** Add a name filter above the options. Lists past `PICKER_SEARCH_THRESHOLD` get one anyway. */
   searchPlaceholder?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const visibleOptions = searchPlaceholder
-    ? options.filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
-    : options
+  const listRef = useRef<HTMLDivElement>(null)
+  const searchLabel = searchPlaceholder ?? (options.length > PICKER_SEARCH_THRESHOLD ? 'Search…' : undefined)
+  const visibleOptions = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return searchLabel && needle
+      ? options.filter(
+          (option) => option.label.toLowerCase().includes(needle) || option.value.toLowerCase().includes(needle),
+        )
+      : options
+  }, [options, search, searchLabel])
 
   useEffect(() => {
-    if (!open || !searchPlaceholder) return
+    if (!open || !searchLabel) return
     const timeout = window.setTimeout(() => searchRef.current?.focus())
     return () => window.clearTimeout(timeout)
-  }, [open, searchPlaceholder])
+  }, [open, searchLabel])
 
   if (readOnly) {
     return (
@@ -82,6 +96,18 @@ export function PickerPill({
       </span>
     )
   }
+  const renderOption = (option: { value: string; label: string; desc?: string }) => (
+    <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
+      <span className="flex min-w-0 flex-col">
+        <span className="text-label font-medium">{option.label}</span>
+        {option.desc ? (
+          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
+            {option.desc}
+          </span>
+        ) : null}
+      </span>
+    </DropdownMenuRadioItem>
+  )
   const trigger = (
     <button
       type="button"
@@ -115,14 +141,14 @@ export function PickerPill({
     >
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent ref={contentRef} align="start" data-testid={`${slot}-menu`}>
-        {searchPlaceholder ? (
+        {searchLabel ? (
           <div className="mb-1 flex h-9 items-center gap-2 border-b border-border px-2">
             <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
             <input
               ref={searchRef}
               type="search"
-              aria-label={searchPlaceholder}
-              placeholder={searchPlaceholder}
+              aria-label={searchLabel}
+              placeholder={searchLabel}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={(event) => {
@@ -134,6 +160,15 @@ export function PickerPill({
                   )
                   const next = event.key === 'ArrowDown' ? options?.[0] : options?.[options.length - 1]
                   next?.focus()
+                } else if (event.key === 'Enter' && !event.nativeEvent.isComposing && search.trim()) {
+                  // Enter takes the top match of a typed filter.
+                  event.preventDefault()
+                  event.stopPropagation()
+                  const first = visibleOptions[0]
+                  if (!first) return
+                  onPick(first.value)
+                  setOpen(false)
+                  setSearch('')
                 } else if (event.key !== 'Escape') {
                   // Keep printable keys out of Radix's typeahead. Once an arrow moves focus into
                   // the menu, Radix owns the usual ArrowUp/ArrowDown/Enter interaction again.
@@ -145,24 +180,30 @@ export function PickerPill({
           </div>
         ) : null}
         <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
-          {visibleOptions.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
-              <span className="flex min-w-0 flex-col">
-                <span className="text-[12.5px] font-medium">{option.label}</span>
-                {option.desc ? (
-                  <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-[11.5px] text-muted-foreground md:max-w-96">
-                    {option.desc}
-                  </span>
-                ) : null}
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
+          {searchLabel ? (
+            // Its own scroller under the search row, so virtua can window the rows.
+            <div
+              ref={listRef}
+              className="max-h-[min(20rem,calc(var(--radix-dropdown-menu-content-available-height)-3.5rem))] overflow-y-auto overscroll-contain"
+            >
+              {visibleOptions.length > PICKER_VIRTUALIZE_THRESHOLD ? (
+                // `data` + a render function: only the windowed rows are ever built as elements.
+                <Virtualizer scrollRef={listRef} itemSize={30} data={visibleOptions}>
+                  {renderOption}
+                </Virtualizer>
+              ) : (
+                visibleOptions.map(renderOption)
+              )}
+            </div>
+          ) : (
+            visibleOptions.map(renderOption)
+          )}
         </DropdownMenuRadioGroup>
-        {searchPlaceholder && visibleOptions.length === 0 ? (
-          <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>
+        {searchLabel && visibleOptions.length === 0 ? (
+          <p className="px-2 py-5 text-center text-xs text-muted-foreground">No matches found.</p>
         ) : null}
         {status ? (
-          <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
+          <DropdownMenuItem disabled className="border-t border-border text-meta text-muted-foreground">
             {status}
           </DropdownMenuItem>
         ) : null}

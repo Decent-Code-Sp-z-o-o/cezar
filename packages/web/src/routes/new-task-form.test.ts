@@ -16,6 +16,8 @@ import {
   modelCatalogStatus,
   modelConflictsWithRunner,
   pushRecentSource,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   resolveSource,
@@ -177,9 +179,9 @@ describe('model option resolution', () => {
     // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
     // list is the single source both the route and the picker compile against — this asserts they
     // still agree on who discovers, and that a runner is never added to it by accident.
-    // #794 gave OpenCode a catalog, #784 Claude, #807 Cursor — and ollama reads its model
-    // library straight off the running server (`GET /api/tags`), so it discovers too.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'ollama'])
+    // Ollama reads its model library straight off the running server (`GET /api/tags`), and
+    // Antigravity/Kimi discover from their own CLIs, so they discover too.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'ollama', 'antigravity', 'kimi'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
@@ -204,6 +206,21 @@ describe('model option resolution', () => {
         stale: false,
       }).map((m) => m.id),
     ).toEqual([''])
+  })
+
+  it('gemini stays OUT of discovery: its presets plus free text, and no /models request', () => {
+    // Gemini CLI has no host catalog in cezar, so `GET /models?runner=gemini` would 400 and the
+    // picker offers `MODELS_BY_RUNNER.gemini` — the server's `KNOWN_PRESETS_BY_RUNNER.gemini` plus
+    // the implicit `auto` (#581; spec § API Contracts, same rule as pi and copilot).
+    expect(runnerDiscoversModels('gemini')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('gemini')
+    expect(modelsForRunner('gemini').map((m) => m.id)).toEqual([
+      '',
+      'gemini-3.5-flash',
+      'gemini-3-flash-preview',
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-pro',
+    ])
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {
@@ -324,6 +341,68 @@ describe('the Auto runner (spec 2026-10-12-auto-provider-selection)', () => {
   })
 })
 
+describe('Codex reasoning effort option resolution', () => {
+  const catalog = {
+    runner: 'codex' as const,
+    models: [
+      {
+        id: 'gpt-future',
+        label: 'Future',
+        description: 'Future Codex model',
+        reasoningEfforts: [
+          { id: 'low', description: 'Faster' },
+          { id: 'high', description: 'More thorough' },
+        ],
+      },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('exposes levels only for the selected discovered Codex model', () => {
+    expect(reasoningEffortsForModel('codex', 'gpt-future', catalog).map((option) => option.id)).toEqual([
+      'low',
+      'high',
+    ])
+    expect(reasoningEffortsForModel('codex', '', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('claude', 'gpt-future', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('codex', 'custom-id', catalog)).toEqual([])
+  })
+
+  it('keeps a valid pick and clears a stale or absent one back to the native default', () => {
+    expect(resolveReasoningEffort('high', 'codex', 'gpt-future', catalog)).toBe('high')
+    expect(resolveReasoningEffort('medium', 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort(null, 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort('high', 'claude', 'gpt-future', catalog)).toBe('')
+  })
+})
+
+describe('Claude reasoning effort option resolution (#808)', () => {
+  const catalog = {
+    runner: 'claude' as const,
+    models: [
+      { id: 'opus', label: 'Opus', description: '', reasoningEfforts: [{ id: 'high', description: '' }, { id: 'max', description: '' }] },
+      { id: 'old', label: 'Old', description: '' },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('exposes levels for a discovered Claude model that advertises them, and nowhere else', () => {
+    expect(reasoningEffortsForModel('claude', 'opus', catalog).map((option) => option.id)).toEqual(['high', 'max'])
+    expect(reasoningEffortsForModel('claude', '', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('claude', 'old', catalog)).toEqual([])
+    // A catalog for another runner never lends its levels.
+    expect(reasoningEffortsForModel('codex', 'opus', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('opencode', 'opus', { ...catalog, runner: 'opencode' as const })).toEqual([])
+  })
+
+  it('keeps a valid Claude pick and drops one the model does not advertise', () => {
+    expect(resolveReasoningEffort('max', 'claude', 'opus', catalog)).toBe('max')
+    expect(resolveReasoningEffort('minimal', 'claude', 'opus', catalog)).toBe('')
+  })
+})
+
 describe('resolveSource (the draft pick, validated — no cold default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
@@ -439,6 +518,21 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     }
     expect(buildCreateRunBody(opts).model).toBeUndefined()
     expect(buildAutomationTask(opts).model).toBeUndefined()
+  })
+
+  it('sends a selected Codex effort but keeps the native default implicit', () => {
+    const base = {
+      task: 'reason carefully',
+      source: { source: 'workflow' as const, ref: 'quick-task' },
+      model: 'gpt-future',
+      runner: 'codex' as const,
+      defaultRunner: 'codex' as const,
+      variants: 1,
+      images: [],
+    }
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high' }).reasoningEffort).toBe('high')
+    expect(buildCreateRunBody({ ...base, reasoningEffort: '' }).reasoningEffort).toBeUndefined()
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high', modelsLocked: true }).reasoningEffort).toBeUndefined()
   })
 
   it('omits runner when the chosen connected runner equals the server default', () => {
@@ -608,6 +702,13 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     expect(projectDefaultSource(config, true, skills)).toEqual({ source: 'skill', ref: 'ask' })
     expect(projectDefaultSource({ defaultSkill: 'gone' }, false, skills)).toBeNull()
     expect(projectDefaultSource(undefined, false, skills)).toBeNull()
+  })
+
+  it('keeps the configured skill when the catalog failed to load, instead of dropping to quick-task', () => {
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, null)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, null)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource(undefined, false, null)).toBeNull()
   })
 
   it('reads a trailing question mark as a question', () => {

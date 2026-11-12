@@ -10,6 +10,7 @@ import { CenteredState } from '@/components/centered-state'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { MachineCard } from './machine-card'
 import { SettingsField } from './settings-field'
 
@@ -46,9 +47,7 @@ export function ResourcesSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="resources-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading resource settings…
-      </p>
+      <LoadingState label="Loading resource settings…" data-slot="resources-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {
@@ -156,7 +155,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           max={MAX_PARALLEL_MAX}
           onCommit={(maxParallel) => save.mutateAsync({ resources: { maxParallel: maxParallel ?? MAX_PARALLEL_MIN } })}
         />
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Need a different limit for one project?{' '}
           <Link
             to="/settings/global/projects"
@@ -181,7 +180,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           max={IDLE_TIMEOUT_MAX}
           onCommit={(minutes) => save.mutateAsync({ resources: { idleTimeoutMinutes: minutes ?? 0 } })}
         />
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Minutes; 0 keeps plain waiting sessions alive. Monitoring sessions are already exempt.
         </p>
       </SettingsField>
@@ -198,7 +197,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           max={MAX_MONITORING_MAX}
           onCommit={(sessions) => save.mutateAsync({ resources: { maxMonitoringSessions: sessions ?? 0 } })}
         />
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
         </p>
       </SettingsField>
@@ -238,9 +237,9 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
         </div>
         {wakeMode === 'interval' && wakeInvalid ? (
-          <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
+          <p data-slot="resources-monitoring-wake-invalid" className="text-meta text-danger">Enter a whole number from 1 to 60 minutes.</p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
+          <p className="text-meta text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
         )}
       </SettingsField>
 
@@ -259,7 +258,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           <option value="on">On</option>
           <option value="off">Off</option>
         </select>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Applies to Claude, Codex and OpenCode — whenever the provider says when the limit lifts.
         </p>
       </SettingsField>
@@ -346,11 +345,11 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           </Button>
         </div>
         {memoryInvalid ? (
-          <p data-slot="resources-memory-invalid" className="text-[11px] text-danger">
+          <p data-slot="resources-memory-invalid" className="text-meta text-danger">
             Enter a whole number of at least {MEMORY_MIN_MB} MiB, or leave empty for no limit.
           </p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
+          <p className="text-meta text-soft-foreground">Applies to newly started tasks.</p>
         )}
       </SettingsField>
 
@@ -372,7 +371,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-meta text-soft-foreground">
               Inherited: {composerDefaults.inheritedAutonomous === 'source-dependent'
                 ? 'Source-dependent — skills on, workflows off'
                 : composerDefaults.inheritedAutonomous ? 'On' : 'Off'}
@@ -391,12 +390,12 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-meta text-soft-foreground">
               Inherited: {composerDefaults.inheritedWorktree ? 'On' : 'Off'}
             </span>
           </label>
         </div>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Interactive skills may recommend both off. Multi-step and parallel runs remain isolated.
         </p>
       </SettingsField>

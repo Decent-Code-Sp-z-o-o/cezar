@@ -168,7 +168,7 @@ afterEach(() => {
   document.documentElement.classList.remove('light')
 })
 
-const PROJECT_SECTIONS = ['tracker', 'secrets', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
+const PROJECT_SECTIONS = ['tracker', 'secrets', 'webhooks', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
 const GLOBAL_SECTIONS = [
   'appearance',
   'notifications',
@@ -176,11 +176,14 @@ const GLOBAL_SECTIONS = [
   'keyboard',
   'resources',
   'skills',
+  'global-instructions',
   // Agent accounts (spec 2026-07-29-agent-profiles) sit beside Projects: both describe the
   // machine and the person at it, not any one repo.
   'workspace-secrets',
   'accounts',
   'projects',
+  // The configuration bundle (spec 2026-11-04-automations-and-config-export-import).
+  'transfer',
   // Telemetry consent (docs/telemetry.md) — one answer per machine.
   'privacy',
 ]
@@ -195,7 +198,7 @@ describe('the section registry', () => {
 
   it('splits the sections by scope (step 3.5) — each id belongs to exactly one area', () => {
     expect(visibleSettingsSections('project').map((s) => s.id)).toEqual(PROJECT_SECTIONS)
-    expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+    expect(visibleSettingsSections('global', { managers: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     // No id may appear in both areas — the two navs would then link to two different pages
     // under the same name, and the `settings/<id>` legacy redirect would be ambiguous.
     expect(PROJECT_SECTIONS.filter((id) => GLOBAL_SECTIONS.includes(id))).toEqual([])
@@ -204,11 +207,26 @@ describe('the section registry', () => {
   it('hides Projects only when the single-project capability is active', () => {
     // Accounts survives: a single-project cockpit still runs on ONE of possibly several logins,
     // so "which account" is orthogonal to "how many projects".
-    expect(visibleSettingsSections('global', { singleProject: true }).map((s) => s.id)).toEqual([
-      'appearance', 'notifications', 'keyboard', 'resources', 'skills', 'workspace-secrets', 'accounts', 'privacy',
+    expect(visibleSettingsSections('global', { singleProject: true, managers: false }).map((s) => s.id)).toEqual([
+      'appearance', 'notifications', 'keyboard', 'resources', 'skills', 'global-instructions', 'workspace-secrets', 'accounts', 'transfer', 'privacy',
     ])
-    expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
-    expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+    expect(visibleSettingsSections('global', { singleProject: false, managers: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+  })
+
+  it('lists Manager only on a server that says it has managers', () => {
+    const nav = (capabilities?: { managers?: boolean }) => settingsSectionsByScope(capabilities).global.map((s) => s.id)
+    expect(nav()).not.toContain('manager')
+    expect(nav({})).not.toContain('manager')
+    expect(nav({ managers: false })).not.toContain('manager')
+    expect(nav({ managers: true })).toContain('manager')
+  })
+
+  it('routes Manager until health answers, so a reload never falls into the legacy redirect', () => {
+    const routed = (capabilities?: { managers?: boolean }) => visibleSettingsSections('global', capabilities).map((s) => s.id)
+    expect(routed()).toContain('manager')
+    expect(routed({ managers: true })).toContain('manager')
+    expect(routed({})).not.toContain('manager')
+    expect(routed({ managers: false })).not.toContain('manager')
   })
 })
 
@@ -743,7 +761,7 @@ describe('the appearance section (global scope)', () => {
     // `{ accent }` would silently drop the stored density.
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'violet', density: 'compact', width: 'narrow' },
+        appearance: { accent: 'violet', density: 'compact', width: 'wide' },
       })
     })
     expect(localStorage.getItem('cez-accent')).toBe('violet')
@@ -760,32 +778,32 @@ describe('the appearance section (global scope)', () => {
     expect(document.documentElement.hasAttribute('data-density')).toBe(false)
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'lime', density: 'comfortable', width: 'narrow' },
+        appearance: { accent: 'lime', density: 'comfortable', width: 'wide' },
       })
     })
   })
 
-  it('reading width round-trip: Wide stamps the root and PUTs the full object; back to Narrow clears it', async () => {
+  it('reading width round-trip: Narrow stamps the root and PUTs the full object; back to Full clears it', async () => {
     serve({ appearance: { accent: 'violet' } })
     renderAt('/settings/global/appearance')
-    // Wait for the server value to settle (Violet is server-provided; Narrow is the default and
+    // Wait for the server value to settle (Violet is server-provided; Full is the default and
     // would report "checked" from the mirror before the GET even lands), so the pending load
     // can't clobber the width write we're about to make.
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: 'Violet' }).getAttribute('aria-checked')).toBe('true')
     })
-    expect(screen.getByRole('radio', { name: 'Narrow' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio', { name: 'Full' }).getAttribute('aria-checked')).toBe('true')
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Wide' }))
-    expect(document.documentElement.dataset.width).toBe('wide')
+    fireEvent.click(screen.getByRole('radio', { name: 'Narrow' }))
+    expect(document.documentElement.dataset.width).toBe('narrow')
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'violet', density: 'comfortable', width: 'wide' },
+        appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
       })
     })
 
-    // Narrow is the default — the attribute must come OFF the root, not be written as data-width="narrow".
-    fireEvent.click(screen.getByRole('radio', { name: 'Narrow' }))
+    // Full is the default — the attribute must come OFF the root, not be written as data-width="wide".
+    fireEvent.click(screen.getByRole('radio', { name: 'Full' }))
     await waitFor(() => {
       expect(document.documentElement.hasAttribute('data-width')).toBe(false)
     })
@@ -828,7 +846,7 @@ describe('the settings split writes the right store', () => {
 
     await waitFor(() => expect(putsTo('/api/v1/workspace/ui-state')).toHaveLength(1))
     expect(putsTo('/api/v1/workspace/ui-state')[0]?.body).toEqual({
-      appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
+      appearance: { accent: 'violet', density: 'comfortable', width: 'wide' },
     })
     expect(putsTo('/api/v1/ui-state')).toHaveLength(0)
   })

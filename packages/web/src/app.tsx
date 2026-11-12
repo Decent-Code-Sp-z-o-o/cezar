@@ -41,16 +41,16 @@ export function App() {
             card or route) is live per viewport. Muted here at the root because the widget lives in
             the shell for the session, above every route. */}
         <HostUsageProvider>
-          {/* Beside the stream on purpose: it watches the run-list cache the stream patches
-              (and reconciliation refetches), turning attention transitions into browser
-              notifications when the tab is hidden (R6 1.7). Renders nothing. */}
-          <RunNotifications />
           <ThemeProvider>
             {/* Beside ThemeProvider on purpose: appearance (accent/density) is the ui-state.json
                 half of the same boot contract — mirror pre-paints, server truth reconciles. */}
             <AppearanceProvider>
               <BrowserRouter>
                 <LastLocationController />
+                {/* Watches the run-list cache the stream patches (and reconciliation refetches),
+                    turning attention transitions into browser notifications when the tab is
+                    hidden (R6 1.7). In the router so a click opens the task or chat. */}
+                <RunNotifications />
                 {/* Page views + error hooks; the server forwards them only after the user opted in
                     (docs/telemetry.md). Renders nothing. */}
                 <Telemetry />

@@ -49,6 +49,16 @@ describe('provisionSkills', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+  it('never links a command into the task worktree', async () => {
+    const file = join(root, 'main/.claude/commands/speckit.plan.md');
+    mkdirSync(join(root, 'main/.claude/commands'), { recursive: true });
+    writeFileSync(file, 'plan $ARGUMENTS');
+    const command = skill('speckit.plan', 'plan $ARGUMENTS', { path: file, source: 'agents', kind: 'command' });
+    expect(await provisionSkills(cwd, [command], [command])).toEqual([]);
+    expect(existsSync(join(cwd, '.claude/skills'))).toBe(false);
+    expect(existsSync(join(cwd, '.agents/skills'))).toBe(false);
+  });
+
   it('installs the selected skill and its companion into both agent skill dirs, git-excluded', async () => {
     // The selected skill lives in a gitignored install dir of ANOTHER checkout (the main repo).
     const installed = join(root, 'main/.claude/skills/om-auto-review-pr');
@@ -115,5 +125,20 @@ describe('provisionSkills', () => {
     expect(names).toEqual([]);
     expect(existsSync(join(cwd, '.claude/escape'))).toBe(false);
     expect(existsSync(join(root, 'escape'))).toBe(false);
+  });
+
+  it('copies a bundled built-in skill directory (references/ included) and never links into the package', async () => {
+    const pkg = join(root, 'pkg/skills/change-impact');
+    mkdirSync(join(pkg, 'references'), { recursive: true });
+    writeFileSync(join(pkg, 'SKILL.md'), '---\nname: change-impact\n---\nBody');
+    writeFileSync(join(pkg, 'references/analysis-contract.md'), '# contract');
+    const shipped = skill('change-impact', 'Body', { path: join(pkg, 'SKILL.md'), source: 'builtin' });
+    expect(await provisionSkills(cwd, [shipped], [shipped])).toEqual(['change-impact']);
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      const dest = join(cwd, dir, 'change-impact');
+      expect(lstatSync(dest).isSymbolicLink()).toBe(false);
+      expect(readFileSync(join(dest, 'references/analysis-contract.md'), 'utf8')).toBe('# contract');
+    }
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' })).toBe('');
   });
 });

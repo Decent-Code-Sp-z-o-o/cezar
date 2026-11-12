@@ -162,7 +162,7 @@ function ImageSide({ label, src, alt, side }: { label?: string; src: string; alt
   const [failed, setFailed] = useState<string | null>(null)
   return (
     <figure data-slot="diff-image-side" data-side={side} className="flex min-w-0 flex-col items-center gap-1.5">
-      {label ? <figcaption className="text-[11px] font-medium text-soft-foreground">{label}</figcaption> : null}
+      {label ? <figcaption className="text-meta font-medium text-soft-foreground">{label}</figcaption> : null}
       {failed === src ? (
         <PreviewNote>Image can’t be previewed (too large or unavailable).</PreviewNote>
       ) : (

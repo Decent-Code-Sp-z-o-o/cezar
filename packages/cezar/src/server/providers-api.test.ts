@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,7 @@ import {
   type ProviderId,
   type RunProviderCommand,
 } from '../core/provider-auth.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -61,6 +62,12 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
   // `ollama list` — exit 0 IS the connected answer; the table's shape is irrelevant.
   ollama: 'NAME             ID              SIZE      MODIFIED\nqwen3-coder:30b  6f3a1c2d9e4b    18 GB     2 days ago',
+  omp: '18.4.2',
+  // `agy models` lists the signed-in account's models (live agy 1.4.0 output).
+  antigravity: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+  // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
+  gemini: '0.60.0',
+  kimi: 'kimi-code  type=oauth  models=3  source=default',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -79,13 +86,24 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
   // The daemon-down answer: `ollama list` exits 1 with "could not connect".
   ollama: 'Error: could not connect to ollama app, is it running?',
+  // omp has no disconnected answer: `--version` is the only probe and it says nothing about a
+  // login. Its credential evidence is read off the injected env / agent dir (pinned in
+  // `beforeEach` below), so the state map's `disconnected` for omp exercises the exit-1 path only
+  // (→ `unknown`); the unknown/connected branches live in `core/provider-auth.test.ts`.
+  omp: '18.4.2',
+  antigravity: 'Please sign in',
+  gemini: '0.60.0',
+  kimi: 'No providers configured.',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'ollama') return executable;
+  const name = basename(executable);
+  if (name === 'claude' || name === 'codex' || name === 'opencode' || name === 'pi' || name === 'junie' || name === 'copilot' || name === 'ollama' || name === 'omp' || name === 'kimi') return name as ProviderId;
+  if (name === 'agy') return 'antigravity';
+  if (name === 'gemini') return 'gemini';
   // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
   // Cursor installed (#1503), so match it too or the suite fails only on such machines.
-  if (executable === 'agent' || basename(executable) === 'cursor-agent') return 'cursor';
+  if (name === 'agent' || name === 'cursor-agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 
@@ -109,6 +127,9 @@ describe('workspace provider API', () => {
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedRemote = process.env.CEZ_REMOTE;
+  const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let ompAgentDir: string;
+  const savedGeminiKey = process.env.GEMINI_API_KEY;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cez-providers-api-'));
@@ -116,6 +137,13 @@ describe('workspace provider API', () => {
     delete process.env.CEZ_AGENT_MODELS_LOCKED;
     delete process.env.CEZ_DRY_RUN;
     delete process.env.CEZ_REMOTE;
+    // omp reads its login evidence off the host: pin an agent.db so the suite is hermetic.
+    ompAgentDir = mkdtempSync(join(tmpdir(), 'cez-omp-agent-'));
+    writeFileSync(join(ompAgentDir, 'agent.db'), '');
+    process.env.PI_CODING_AGENT_DIR = ompAgentDir;
+    // Gemini's connected-ness is an environment read, not a probe output: give it a key so the
+    // stubbed "every provider connected" host really is one.
+    process.env.GEMINI_API_KEY = 'AIza-test-key';
   });
 
   afterEach(() => {
@@ -125,8 +153,13 @@ describe('workspace provider API', () => {
     else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
+    rmSync(ompAgentDir, { recursive: true, force: true });
+    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
     else process.env.CEZ_REMOTE = savedRemote;
+    if (savedGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = savedGeminiKey;
   });
 
   const service = (
@@ -218,6 +251,10 @@ describe('workspace provider API', () => {
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
         { provider: 'ollama', status: 'connected', enabled: true },
+        { provider: 'omp', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'connected', enabled: true },
+        { provider: 'gemini', status: 'connected', enabled: true },
+        { provider: 'kimi', status: 'connected', enabled: true },
       ],
     });
   });
@@ -225,7 +262,7 @@ describe('workspace provider API', () => {
   it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
     const runCommand = vi.fn<RunProviderCommand>();
-    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot', 'ollama']);
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot', 'ollama', 'kimi']);
     const response = await apiRequest(app({
       providerAuth: service({}, runCommand),
       workspaceConfig,
@@ -242,6 +279,10 @@ describe('workspace provider API', () => {
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
         { provider: 'ollama', status: 'connected', enabled: true },
+        { provider: 'omp', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'connected', enabled: true },
+        { provider: 'gemini', status: 'connected', enabled: true },
+        { provider: 'kimi', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -838,7 +879,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, or copilot' });
+    expect(await response.json()).toEqual({ error: `provider must be one of ${RUNNER_IDS.join(', ')}` });
   });
 
   it('never places request-controlled text in the opened command', async () => {
