@@ -730,11 +730,13 @@ describe('the facts line', () => {
     expect(diff.compareDocumentPosition(pr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('tokens, cost and the agent badge are not in the header at all — they sit under the composer (`RunUsage`)', () => {
+  it('tokens and cost are not in the header — but the fork keeps the agent badge in the meta row', () => {
     stubFetch()
     renderHeader(run('done', { costUsd: 12, inputTokens: 152, outputTokens: 37_300 }))
     expect(document.querySelector('[data-slot="run-meta"] [data-slot="run-usage"]')).toBeNull()
-    expect(document.querySelector('[data-slot="run-header"] [data-slot="agent-badge"]')).toBeNull()
+    // Upstream's redesign moved the badge under the composer; the fork keeps the header
+    // disclosure (runner/account/model/identity + the auto-request's hops) in the meta row.
+    expect(document.querySelector('[data-slot="run-header"] [data-slot="agent-badge"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="run-header"]')?.textContent).not.toContain('$12')
   })
 
@@ -2691,7 +2693,10 @@ describe('the facts line reads cleanly on both sides of the breakpoint', () => {
     stubFetch()
     renderHeader(run('review', { branch: 'cez/r1', diffStat: { adds: 1, dels: 0, files: 1 } }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const nodes = [...meta.children].filter((node) => node.getAttribute('data-slot') !== 'run-usage')
+    // The fork's agent badge rides the row too (icon-only) — excluded like the usage chip:
+    // this test pins the VISIBLE chips' dot grammar, and the badge carries no words to strand.
+    const nodes = [...meta.children].filter((node) =>
+      node.getAttribute('data-slot') !== 'run-usage' && node.getAttribute('data-slot') !== 'agent-badge')
     const reads = (breakpoint: 'phone' | 'desktop') =>
       nodes
         .filter((node) => {

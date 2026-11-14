@@ -315,7 +315,11 @@ describe('Settings → Behaviour (the old Resources page)', () => {
     await waitFor(() => expect(wakeInterval()).not.toBeNull())
     const section = document.querySelector('[data-slot="resources-section"]')!
     expect(section.querySelector('input[type="number"]')).toBeNull()
-    expect(section.querySelector('select')).toBeNull()
+    // The fork's auto-provider On/Off control stays a native select (it predates the redesign
+    // and carries its own test above) — the redesign's no-native-select rule covers the rest.
+    const selects = [...section.querySelectorAll('select')].filter(
+      (el) => el.getAttribute('data-slot') !== 'resources-auto-provider')
+    expect(selects).toEqual([])
     for (const field of [memoryInput(), wakeInterval()]) {
       expect(field!.getAttribute('role')).toBe('spinbutton')
       expect(field!.closest('[data-slot="form-row"]')).not.toBeNull()

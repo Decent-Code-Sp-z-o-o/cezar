@@ -5768,11 +5768,14 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
+    // The fork's `auto` names no backend here (the conservative arm above), so it never resumes;
+    // everything else matches upstream's gate: attempt the resume and let the missing-session
+    // fallback cover a dead session (backends that cannot resume, ollama included, ignore the
+    // flag — no `RESUMABLE_BACKENDS` clause at this gate, matching upstream's tests).
     const resume = Boolean(sessionStep?.sessionId)
       && !requestedAuto
       && sessionBackend === targetRunner
-      && !accountSwitched
-      && RESUMABLE_BACKENDS.has(targetRunner);
+      && !accountSwitched;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat

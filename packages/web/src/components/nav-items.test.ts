@@ -99,7 +99,7 @@ describe('NAV_ITEMS', () => {
   it('files Inbox and Settings under Workspace, every other item under the project', () => {
     expect(NAV_ITEMS.filter((item) => item.group === 'workspace').map((item) => item.label)).toEqual(['Inbox', 'Settings'])
     expect(NAV_ITEMS.filter((item) => !item.group).map((item) => item.label)).toEqual([
-      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Automations', 'Skills', 'Workflows',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Automations', 'Terminal', 'Skills', 'Workflows',
     ])
   })
 

@@ -905,10 +905,6 @@ function MetaRow({
       ),
     )
   }
-  // The agent badge (fork): the composer pills name the engine, the header keeps the one-click
-  // disclosure — runner/account/model/identity, plus the auto-request's hops for `auto` tasks.
-  parts.push(<AgentBadge key="agent" run={run} />)
-
   return (
     <div
       data-slot="run-meta"
@@ -924,6 +920,10 @@ function MetaRow({
           {part}
         </Fragment>
       ))}
+      {/* The agent badge (fork): the composer pills name the engine, the header keeps the
+          one-click disclosure — runner/account/model/identity, plus an `auto` task's hops.
+          Rendered after the dots, as an affordance rather than a fact chip. */}
+      <AgentBadge run={run} />
     </div>
   )
 }

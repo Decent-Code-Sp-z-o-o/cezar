@@ -825,7 +825,9 @@ export function NewTaskRoute() {
   // stand-in the catalog uses; the launch itself names no account.
   const logins = accountChoices.filter((choice) => choice.provider === catalogRunner)
   const selectedAccount = agentProfile ?? repoAccount?.[catalogRunner] ?? DEFAULT_AGENT_ACCOUNT_ID
-  const effortOffered = runner !== null && reasoningEffortOffered(displayRunner, model, reasoningEfforts)
+  // Effort speaks concrete runners too — under `auto` the catalog is disabled and no effort is
+  // offered, so the preferred runner stands in here exactly as it does for the catalog.
+  const effortOffered = runner !== null && reasoningEffortOffered(catalogRunner, model, reasoningEfforts)
   const isolationShown = worktreeToggleShown && (!askOn || dispatchAvailable)
   const optionsSummary = composerOptionsSummary({
     variants,

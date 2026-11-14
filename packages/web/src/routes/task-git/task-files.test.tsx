@@ -134,7 +134,9 @@ describe('the Files tab route', () => {
     const rows = [...document.querySelectorAll('[data-slot="files-dir"], [data-slot="files-file"]')].map(
       (el) => (el as HTMLElement).dataset.path,
     )
-    expect(rows).toEqual(['src', 'big.txt', 'blob.dat', 'hello.ts', 'logo.png', 'report.pdf', 'page.html'])
+    // The redesign groups the tree: dirs, then plain files by name, then junk last (the
+    // binary/logo/media group). The fork's pdf/html preview fixtures ride the same ordering.
+    expect(rows).toEqual(['src', 'big.txt', 'blob.dat', 'hello.ts', 'page.html', 'logo.png', 'report.pdf'])
     // The image is listed, after the source files and in the tertiary ink (redesign 2026-11).
     const logo = document.querySelector<HTMLElement>('[data-slot="files-file"][data-path="logo.png"]')!
     expect(logo.dataset.junk).toBe('true')
